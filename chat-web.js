@@ -6,8 +6,8 @@
 const http = require('http');
 const { createClient } = require('redis');
 
-const PORT = 8888;
-const REDIS_PASS = 'SerinaCortana2026!';
+const PORT = process.env.PORT || 8888;
+const REDIS_PASS = process.env.REDIS_PASS || 'SerinaCortana2026!';
 
 const HTML = `<!DOCTYPE html>
 <html>
