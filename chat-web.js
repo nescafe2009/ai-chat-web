@@ -9,8 +9,6 @@ const { createClient } = require('redis');
 
 const PORT = 8888;
 const REDIS_PASS = 'SerinaCortana2026!';
-const SERINA_WAKE_URL = 'http://127.0.0.1:18789/hooks/wake';
-const SERINA_WAKE_TOKEN = 'serina-wake-2026';
 
 // 验证码存储（内存，重启会清空）
 const loginCodes = new Map(); // code -> { expires, used }
@@ -53,30 +51,23 @@ function checkAuth(req) {
   return session.user;
 }
 
-// 调用 Serina wake API 发送钉钉消息
+// 通过 Redis 通知 Serina（发到 serina:messages，她的守护进程会收到并唤醒她）
 async function notifySerina(message) {
-  return new Promise((resolve) => {
-    const data = JSON.stringify({ text: message, mode: 'now' });
-    const url = new URL(SERINA_WAKE_URL);
-    
-    const req = http.request({
-      hostname: url.hostname,
-      port: url.port,
-      path: url.pathname,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${SERINA_WAKE_TOKEN}`
-      }
-    }, (res) => {
-      resolve(res.statusCode === 200);
+  const client = createClient({ socket: { host: '127.0.0.1', port: 6379 }, password: REDIS_PASS });
+  try {
+    await client.connect();
+    await client.xAdd('serina:messages', '*', {
+      from: 'system',
+      to: 'serina',
+      content: message,
+      timestamp: Date.now().toString()
     });
-    
-    req.on('error', () => resolve(false));
-    req.setTimeout(10000, () => { req.destroy(); resolve(false); });
-    req.write(data);
-    req.end();
-  });
+    await client.quit();
+    return true;
+  } catch (e) {
+    if (client) try { await client.quit(); } catch (e) {}
+    return false;
+  }
 }
 
 // 登录页面 HTML
