@@ -256,14 +256,14 @@ const CHAT_HTML = `<!DOCTYPE html>
     .message .content { line-height: 1.5; word-wrap: break-word; white-space: pre-wrap; }
     .message .time { font-size: 11px; color: #666; margin-top: 6px; text-align: right; }
     
-    .input-area { padding: 15px 20px; border-top: 1px solid #333; display: flex; gap: 10px; }
-    .msg-input { flex: 1; padding: 12px 15px; border: 1px solid #333; border-radius: 6px; background: #0f0f23; color: #eee; font-size: 14px; resize: none; }
+    .input-area { padding: 15px 20px; border-top: 1px solid #333; display: flex; gap: 10px; align-items: flex-end; }
+    .msg-input { flex: 1; padding: 12px 15px; border: 1px solid #333; border-radius: 6px; background: #0f0f23; color: #eee; font-size: 14px; resize: none; min-height: 50px; }
     .msg-input:focus { outline: none; border-color: #00d4ff; }
-    .send-btn { padding: 12px 25px; background: #00d4ff; color: #000; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; }
+    .send-btn { padding: 12px 25px; background: #00d4ff; color: #000; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; height: fit-content; }
     .send-btn:hover { background: #00b8e6; }
     .send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
     
-    .target-select { padding: 10px; background: #0f0f23; border: 1px solid #333; border-radius: 6px; color: #eee; font-size: 13px; }
+    .input-hint { padding: 5px 20px 15px; font-size: 12px; color: #666; }
     
     .empty-state { text-align: center; padding: 50px; color: #666; }
   </style>
@@ -287,15 +287,10 @@ const CHAT_HTML = `<!DOCTYPE html>
       </div>
       <div class="chat-box" id="chat"></div>
       <div class="input-area">
-        <select class="target-select" id="target">
-          <option value="all">@所有人</option>
-          <option value="serina">@Serina</option>
-          <option value="cortana">@Cortana</option>
-          <option value="roland">@Roland</option>
-        </select>
-        <textarea class="msg-input" id="msgInput" placeholder="输入消息..." rows="1"></textarea>
+        <textarea class="msg-input" id="msgInput" placeholder="直接输入消息，用 @serina @cortana @roland 指定对象，不写则发给所有人" rows="2"></textarea>
         <button class="send-btn" id="sendBtn" onclick="sendMessage()">发送</button>
       </div>
+      <div class="input-hint">提示：@serina @cortana @roland 可任意组合，不写@则发给所有人</div>
     </div>
   </div>
   
@@ -426,10 +421,14 @@ const CHAT_HTML = `<!DOCTYPE html>
     
     async function sendMessage() {
       const input = document.getElementById('msgInput');
-      const target = document.getElementById('target').value;
       const content = input.value.trim();
       
       if (!content) return;
+      
+      // 解析 @ 目标
+      const mentions = content.toLowerCase().match(/@(serina|cortana|roland)/g) || [];
+      const targets = [...new Set(mentions.map(m => m.slice(1)))]; // 去重
+      const target = targets.length > 0 ? targets.join(',') : 'all';
       
       const btn = document.getElementById('sendBtn');
       btn.disabled = true;
@@ -535,7 +534,14 @@ async function sendToRedis(from, to, content) {
   
   try {
     const timestamp = Date.now().toString();
-    const targets = to === 'all' ? ['serina', 'cortana', 'roland'] : [to];
+    // 支持逗号分隔的多目标，如 "serina,cortana"
+    let targets;
+    if (to === 'all') {
+      targets = ['serina', 'cortana', 'roland'];
+    } else {
+      targets = to.split(',').filter(t => ['serina', 'cortana', 'roland'].includes(t));
+      if (targets.length === 0) targets = ['serina', 'cortana', 'roland'];
+    }
     
     for (const target of targets) {
       await client.xAdd(`${target}:messages`, '*', {
