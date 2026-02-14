@@ -649,27 +649,21 @@ async function getMessages() {
     const rolandMsgs = await client.xRange('roland:messages', '-', '+');
     
     const allMsgs = [];
+    const seen = new Set(); // 用于去重
     
-    for (const m of serinaMsgs) {
+    function addMsg(m) {
+      const key = `${m.message.from}:${m.message.timestamp}:${m.message.content}`;
+      if (seen.has(key)) return;
+      seen.add(key);
       allMsgs.push({
         id: m.id, from: m.message.from, to: m.message.to,
         content: m.message.content, timestamp: m.message.timestamp || m.id.split('-')[0]
       });
     }
     
-    for (const m of cortanaMsgs) {
-      allMsgs.push({
-        id: m.id, from: m.message.from, to: m.message.to,
-        content: m.message.content, timestamp: m.message.timestamp || m.id.split('-')[0]
-      });
-    }
-    
-    for (const m of rolandMsgs) {
-      allMsgs.push({
-        id: m.id, from: m.message.from, to: m.message.to,
-        content: m.message.content, timestamp: m.message.timestamp || m.id.split('-')[0]
-      });
-    }
+    for (const m of serinaMsgs) addMsg(m);
+    for (const m of cortanaMsgs) addMsg(m);
+    for (const m of rolandMsgs) addMsg(m);
     
     allMsgs.sort((a, b) => parseInt(a.timestamp) - parseInt(b.timestamp));
     return { messages: allMsgs };
