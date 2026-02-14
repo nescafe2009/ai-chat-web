@@ -80,8 +80,6 @@ async function deleteSession(sessionId) {
     await client.del(`session:${sessionId}`);
   } catch (e) {}
 }
-  return session.user;
-}
 
 // 通过 Redis 通知 Serina（发到 serina:messages，她的守护进程会收到并唤醒她）
 async function notifySerina(message) {
