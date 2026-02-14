@@ -632,14 +632,6 @@ const CHAT_HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
-// 获取 Redis 客户端
-async function getRedisClient() {
-  const client = createClient({ socket: { host: '127.0.0.1', port: 6379 }, password: REDIS_PASS });
-  client.on('error', () => {});
-  await client.connect();
-  return client;
-}
-
 // 获取所有消息
 async function getMessages() {
   try {
