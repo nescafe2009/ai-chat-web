@@ -9,10 +9,20 @@ const { createClient } = require('redis');
 
 const PORT = 8888;
 const REDIS_PASS = 'SerinaCortana2026!';
+const SESSION_TTL = 24 * 60 * 60; // 24小时（秒）
 
-// 验证码存储（内存，重启会清空）
+// 验证码存储（内存，5分钟有效，重启清空没关系）
 const loginCodes = new Map(); // code -> { expires, used }
-const sessions = new Map();   // sessionId -> { user, expires }
+
+// 获取 Redis 客户端（复用）
+let redisClient = null;
+async function getRedisClient() {
+  if (redisClient && redisClient.isOpen) return redisClient;
+  redisClient = createClient({ socket: { host: '127.0.0.1', port: 6379 }, password: REDIS_PASS });
+  redisClient.on('error', () => {});
+  await redisClient.connect();
+  return redisClient;
+}
 
 // 生成6位数字验证码
 function generateCode() {
@@ -36,18 +46,40 @@ function parseCookies(cookieHeader) {
   return cookies;
 }
 
-// 检查登录状态
-function checkAuth(req) {
+// 检查登录状态（从 Redis 读取）
+async function checkAuth(req) {
   const cookies = parseCookies(req.headers.cookie);
   const sessionId = cookies.session;
   if (!sessionId) return null;
   
-  const session = sessions.get(sessionId);
-  if (!session) return null;
-  if (Date.now() > session.expires) {
-    sessions.delete(sessionId);
+  try {
+    const client = await getRedisClient();
+    const user = await client.get(`session:${sessionId}`);
+    return user;
+  } catch (e) {
     return null;
   }
+}
+
+// 创建会话（存到 Redis）
+async function createSession(user) {
+  const sessionId = generateSessionId();
+  try {
+    const client = await getRedisClient();
+    await client.set(`session:${sessionId}`, user, { EX: SESSION_TTL });
+    return sessionId;
+  } catch (e) {
+    return null;
+  }
+}
+
+// 删除会话
+async function deleteSession(sessionId) {
+  try {
+    const client = await getRedisClient();
+    await client.del(`session:${sessionId}`);
+  } catch (e) {}
+}
   return session.user;
 }
 
@@ -488,9 +520,8 @@ async function getRedisClient() {
 
 // 获取所有消息
 async function getMessages() {
-  const client = await getRedisClient();
-  
   try {
+    const client = await getRedisClient();
     const serinaMsgs = await client.xRange('serina:messages', '-', '+');
     const cortanaMsgs = await client.xRange('cortana:messages', '-', '+');
     const rolandMsgs = await client.xRange('roland:messages', '-', '+');
@@ -519,20 +550,16 @@ async function getMessages() {
     }
     
     allMsgs.sort((a, b) => parseInt(a.timestamp) - parseInt(b.timestamp));
-    
-    await client.quit();
     return { messages: allMsgs };
   } catch (e) {
-    if (client) try { await client.quit(); } catch (e) {}
     return { error: e.message };
   }
 }
 
 // 发送消息到 Redis
 async function sendToRedis(from, to, content) {
-  const client = await getRedisClient();
-  
   try {
+    const client = await getRedisClient();
     const timestamp = Date.now().toString();
     // 支持逗号分隔的多目标，如 "serina,cortana"
     let targets;
@@ -548,11 +575,8 @@ async function sendToRedis(from, to, content) {
         from, to: target, content, timestamp
       });
     }
-    
-    await client.quit();
     return true;
   } catch (e) {
-    if (client) try { await client.quit(); } catch (e) {}
     return false;
   }
 }
@@ -617,9 +641,12 @@ const server = http.createServer(async (req, res) => {
     // 标记已使用
     codeData.used = true;
     
-    // 创建会话
-    const sessionId = generateSessionId();
-    sessions.set(sessionId, { user: 'boss', expires: Date.now() + 24 * 60 * 60 * 1000 }); // 24小时有效
+    // 创建会话（存到 Redis）
+    const sessionId = await createSession('boss');
+    if (!sessionId) {
+      res.end(JSON.stringify({ success: false, error: '创建会话失败' }));
+      return;
+    }
     
     res.setHeader('Set-Cookie', `session=${sessionId}; Path=/; HttpOnly; Max-Age=86400`);
     res.end(JSON.stringify({ success: true }));
@@ -630,7 +657,7 @@ const server = http.createServer(async (req, res) => {
   if (path === '/api/logout' && req.method === 'POST') {
     const cookies = parseCookies(req.headers.cookie);
     if (cookies.session) {
-      sessions.delete(cookies.session);
+      await deleteSession(cookies.session);
     }
     res.setHeader('Set-Cookie', 'session=; Path=/; HttpOnly; Max-Age=0');
     res.setHeader('Content-Type', 'application/json');
@@ -640,7 +667,7 @@ const server = http.createServer(async (req, res) => {
   
   // API: 获取消息（需要登录）
   if (path === '/api/messages') {
-    const user = checkAuth(req);
+    const user = await checkAuth(req);
     if (!user) {
       res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify({ error: 'unauthorized' }));
@@ -655,7 +682,7 @@ const server = http.createServer(async (req, res) => {
   
   // API: 发送消息（需要登录）
   if (path === '/api/send' && req.method === 'POST') {
-    const user = checkAuth(req);
+    const user = await checkAuth(req);
     if (!user) {
       res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify({ error: 'unauthorized' }));
@@ -678,7 +705,7 @@ const server = http.createServer(async (req, res) => {
   }
   
   // 主页面
-  const user = checkAuth(req);
+  const user = await checkAuth(req);
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.end(user ? CHAT_HTML : LOGIN_HTML);
 });
