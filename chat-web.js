@@ -286,7 +286,7 @@ const CHAT_HTML = `<!DOCTYPE html>
     .message .content { line-height: 1.5; word-wrap: break-word; white-space: pre-wrap; }
     .message .time { font-size: 11px; color: #666; margin-top: 6px; text-align: right; }
     
-    .input-area { padding: 15px 20px; border-top: 1px solid #333; display: flex; gap: 10px; align-items: flex-end; }
+    .input-area { padding: 15px 20px; border-top: 1px solid #333; display: flex; gap: 10px; align-items: flex-end; position: relative; }
     .msg-input { flex: 1; padding: 12px 15px; border: 1px solid #333; border-radius: 6px; background: #0f0f23; color: #eee; font-size: 14px; resize: none; min-height: 50px; }
     .msg-input:focus { outline: none; border-color: #00d4ff; }
     .send-btn { padding: 12px 25px; background: #00d4ff; color: #000; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; height: fit-content; }
@@ -294,6 +294,13 @@ const CHAT_HTML = `<!DOCTYPE html>
     .send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
     
     .input-hint { padding: 5px 20px 15px; font-size: 12px; color: #666; }
+    
+    .mention-popup { position: absolute; bottom: 100%; left: 20px; background: #0f0f23; border: 1px solid #333; border-radius: 6px; display: none; min-width: 150px; box-shadow: 0 -4px 12px rgba(0,0,0,0.3); }
+    .mention-popup.show { display: block; }
+    .mention-item { padding: 10px 15px; cursor: pointer; display: flex; align-items: center; gap: 8px; }
+    .mention-item:hover, .mention-item.active { background: #1a1a3e; }
+    .mention-item:first-child { border-radius: 6px 6px 0 0; }
+    .mention-item:last-child { border-radius: 0 0 6px 6px; }
     
     .empty-state { text-align: center; padding: 50px; color: #666; }
   </style>
@@ -317,10 +324,15 @@ const CHAT_HTML = `<!DOCTYPE html>
       </div>
       <div class="chat-box" id="chat"></div>
       <div class="input-area">
-        <textarea class="msg-input" id="msgInput" placeholder="直接输入消息，用 @serina @cortana @roland 指定对象，不写则发给所有人" rows="2"></textarea>
+        <div class="mention-popup" id="mentionPopup">
+          <div class="mention-item" data-name="serina" onclick="insertMention('serina')">💠 Serina</div>
+          <div class="mention-item" data-name="cortana" onclick="insertMention('cortana')">💜 Cortana</div>
+          <div class="mention-item" data-name="roland" onclick="insertMention('roland')">🌿 Roland</div>
+        </div>
+        <textarea class="msg-input" id="msgInput" placeholder="输入消息，@ 可联想，Enter发送，Ctrl+Enter换行" rows="2"></textarea>
         <button class="send-btn" id="sendBtn" onclick="sendMessage()">发送</button>
       </div>
-      <div class="input-hint">提示：@serina @cortana @roland 可任意组合，不写@则发给所有人</div>
+      <div class="input-hint">Enter 发送 | Ctrl+Enter 换行 | @ 自动联想</div>
     </div>
   </div>
   
@@ -494,11 +506,123 @@ const CHAT_HTML = `<!DOCTYPE html>
       return div.innerHTML;
     }
     
-    // Ctrl+Enter 发送
-    document.getElementById('msgInput').addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-        e.preventDefault();
-        sendMessage();
+    // @ 联想功能
+    const mentionPopup = document.getElementById('mentionPopup');
+    const msgInput = document.getElementById('msgInput');
+    const mentionNames = ['serina', 'cortana', 'roland'];
+    let mentionStart = -1;
+    let activeIndex = 0;
+    
+    function showMentionPopup(filter = '') {
+      const items = mentionPopup.querySelectorAll('.mention-item');
+      let visibleCount = 0;
+      items.forEach((item, i) => {
+        const name = item.dataset.name;
+        const show = !filter || name.startsWith(filter.toLowerCase());
+        item.style.display = show ? 'flex' : 'none';
+        if (show) visibleCount++;
+      });
+      if (visibleCount > 0) {
+        mentionPopup.classList.add('show');
+        activeIndex = 0;
+        updateActiveItem();
+      } else {
+        hideMentionPopup();
+      }
+    }
+    
+    function hideMentionPopup() {
+      mentionPopup.classList.remove('show');
+      mentionStart = -1;
+    }
+    
+    function updateActiveItem() {
+      const items = [...mentionPopup.querySelectorAll('.mention-item')].filter(i => i.style.display !== 'none');
+      items.forEach((item, i) => item.classList.toggle('active', i === activeIndex));
+    }
+    
+    function insertMention(name) {
+      const val = msgInput.value;
+      const before = val.substring(0, mentionStart);
+      const after = val.substring(msgInput.selectionStart);
+      msgInput.value = before + '@' + name + ' ' + after;
+      msgInput.focus();
+      const newPos = before.length + name.length + 2;
+      msgInput.setSelectionRange(newPos, newPos);
+      hideMentionPopup();
+    }
+    
+    msgInput.addEventListener('input', (e) => {
+      const val = msgInput.value;
+      const pos = msgInput.selectionStart;
+      
+      // 查找最近的 @
+      let atPos = -1;
+      for (let i = pos - 1; i >= 0; i--) {
+        if (val[i] === '@') { atPos = i; break; }
+        if (val[i] === ' ' || val[i] === '\\n') break;
+      }
+      
+      if (atPos >= 0) {
+        const filter = val.substring(atPos + 1, pos);
+        if (filter.length <= 10 && /^[a-z]*$/i.test(filter)) {
+          mentionStart = atPos;
+          showMentionPopup(filter);
+          return;
+        }
+      }
+      hideMentionPopup();
+    });
+    
+    // 键盘事件：Enter发送，Ctrl+Enter换行，上下选择@
+    msgInput.addEventListener('keydown', (e) => {
+      if (mentionPopup.classList.contains('show')) {
+        const items = [...mentionPopup.querySelectorAll('.mention-item')].filter(i => i.style.display !== 'none');
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          activeIndex = (activeIndex + 1) % items.length;
+          updateActiveItem();
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          activeIndex = (activeIndex - 1 + items.length) % items.length;
+          updateActiveItem();
+          return;
+        }
+        if (e.key === 'Enter' || e.key === 'Tab') {
+          e.preventDefault();
+          const activeItem = items[activeIndex];
+          if (activeItem) insertMention(activeItem.dataset.name);
+          return;
+        }
+        if (e.key === 'Escape') {
+          hideMentionPopup();
+          return;
+        }
+      }
+      
+      // Enter 发送，Ctrl+Enter 换行
+      if (e.key === 'Enter') {
+        if (e.ctrlKey || e.metaKey) {
+          // Ctrl+Enter 换行
+          const pos = msgInput.selectionStart;
+          const val = msgInput.value;
+          msgInput.value = val.substring(0, pos) + '\\n' + val.substring(pos);
+          msgInput.setSelectionRange(pos + 1, pos + 1);
+          e.preventDefault();
+        } else {
+          // Enter 发送
+          e.preventDefault();
+          sendMessage();
+        }
+      }
+    });
+    
+    // 点击外部关闭联想
+    document.addEventListener('click', (e) => {
+      if (!mentionPopup.contains(e.target) && e.target !== msgInput) {
+        hideMentionPopup();
       }
     });
     
