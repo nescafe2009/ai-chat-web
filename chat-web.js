@@ -8,9 +8,9 @@ const crypto = require('crypto');
 const { createClient } = require('redis');
 
 // 配置（支持环境变量）
-const PORT = process.env.PORT || 8888;
+const PORT = parseInt(process.env.PORT, 10) || 8888;
 const REDIS_HOST = process.env.REDIS_HOST || '127.0.0.1';
-const REDIS_PORT = process.env.REDIS_PORT || 6379;
+const REDIS_PORT = parseInt(process.env.REDIS_PORT, 10) || 6379;
 const REDIS_PASS = process.env.REDIS_PASS || 'SerinaCortana2026!';
 const SESSION_TTL = 24 * 60 * 60;
 const MSG_LIMIT = 200; // 每个 stream 最多拉取条数
@@ -18,9 +18,10 @@ const MSG_LIMIT = 200; // 每个 stream 最多拉取条数
 // 验证码存储
 const loginCodes = new Map();
 
-// 消息缓存（防并发重复查询）
-let msgCache = { data: null, time: 0 };
-const CACHE_TTL = 2000; // 2秒缓存
+// 消息缓存（inFlight Promise 防并发）
+let msgCachePromise = null;
+let msgCacheTime = 0;
+const CACHE_TTL = 2000;
 
 // 单例 Redis 客户端
 let redisClient = null;
@@ -39,12 +40,9 @@ async function getRedisClient() {
       host: REDIS_HOST,
       port: REDIS_PORT,
       reconnectStrategy: (retries) => {
-        if (retries > 10) {
-          console.error('[Redis] 重连失败超过10次，放弃');
-          return new Error('Max retries reached');
-        }
         console.log(`[Redis] 重连中... 第${retries}次`);
-        return Math.min(retries * 100, 3000);
+        // 不放弃，持续重连，让 pm2 来决定是否重启
+        return Math.min(retries * 500, 30000); // 最长30秒间隔
       }
     },
     password: REDIS_PASS
@@ -665,46 +663,47 @@ const CHAT_HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
-// 获取所有消息（带缓存 + 限制条数）
+// 获取所有消息（inFlight Promise 防并发 + 用 id 去重）
 async function getMessages() {
-  // 缓存检查
-  if (msgCache.data && Date.now() - msgCache.time < CACHE_TTL) {
-    return msgCache.data;
+  // 缓存有效且有 inFlight，直接返回
+  if (msgCachePromise && Date.now() - msgCacheTime < CACHE_TTL) {
+    return msgCachePromise;
   }
   
-  try {
-    const client = await getRedisClient();
-    // 使用 XREVRANGE + LIMIT 获取最新消息，避免全量扫描
-    const serinaMsgs = await client.xRevRange('serina:messages', '+', '-', { COUNT: MSG_LIMIT });
-    const cortanaMsgs = await client.xRevRange('cortana:messages', '+', '-', { COUNT: MSG_LIMIT });
-    const rolandMsgs = await client.xRevRange('roland:messages', '+', '-', { COUNT: MSG_LIMIT });
-    
-    const allMsgs = [];
-    const seen = new Set();
-    
-    function addMsg(m) {
-      const key = `${m.message.from}:${m.message.timestamp}:${m.message.content}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      allMsgs.push({
-        id: m.id, from: m.message.from, to: m.message.to,
-        content: m.message.content, timestamp: m.message.timestamp || m.id.split('-')[0]
-      });
+  // 创建新的 Promise，并发请求共享
+  msgCacheTime = Date.now();
+  msgCachePromise = (async () => {
+    try {
+      const client = await getRedisClient();
+      const serinaMsgs = await client.xRevRange('serina:messages', '+', '-', { COUNT: MSG_LIMIT });
+      const cortanaMsgs = await client.xRevRange('cortana:messages', '+', '-', { COUNT: MSG_LIMIT });
+      const rolandMsgs = await client.xRevRange('roland:messages', '+', '-', { COUNT: MSG_LIMIT });
+      
+      const allMsgs = [];
+      const seenIds = new Set(); // 用 id 去重
+      
+      function addMsg(m) {
+        if (seenIds.has(m.id)) return;
+        seenIds.add(m.id);
+        allMsgs.push({
+          id: m.id, from: m.message.from, to: m.message.to,
+          content: m.message.content, timestamp: m.message.timestamp || m.id.split('-')[0]
+        });
+      }
+      
+      for (const m of serinaMsgs) addMsg(m);
+      for (const m of cortanaMsgs) addMsg(m);
+      for (const m of rolandMsgs) addMsg(m);
+      
+      allMsgs.sort((a, b) => parseInt(a.timestamp) - parseInt(b.timestamp));
+      return { messages: allMsgs };
+    } catch (e) {
+      console.error('[getMessages] 失败:', e.message);
+      return { error: e.message };
     }
-    
-    for (const m of serinaMsgs) addMsg(m);
-    for (const m of cortanaMsgs) addMsg(m);
-    for (const m of rolandMsgs) addMsg(m);
-    
-    allMsgs.sort((a, b) => parseInt(a.timestamp) - parseInt(b.timestamp));
-    
-    const result = { messages: allMsgs };
-    msgCache = { data: result, time: Date.now() };
-    return result;
-  } catch (e) {
-    console.error('[getMessages] 失败:', e.message);
-    return { error: e.message };
-  }
+  })();
+  
+  return msgCachePromise;
 }
 
 // 发送消息到 Redis
@@ -726,7 +725,8 @@ async function sendToRedis(from, to, content) {
       });
     }
     // 清除缓存，让下次查询能看到新消息
-    msgCache = { data: null, time: 0 };
+    msgCachePromise = null;
+    msgCacheTime = 0;
     return true;
   } catch (e) {
     console.error('[sendToRedis] 失败:', e.message);
