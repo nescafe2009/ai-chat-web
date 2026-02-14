@@ -1,27 +1,240 @@
 /**
- * Redis Chat Web UI v3
- * 改进：左侧日期选择器 + 右侧消息列表
+ * Redis Chat Web UI v4
+ * 新增：钉钉验证码登录 + 发送消息功能
  */
 
 const http = require('http');
+const crypto = require('crypto');
 const { createClient } = require('redis');
 
 const PORT = 8888;
 const REDIS_PASS = 'SerinaCortana2026!';
+const SERINA_WAKE_URL = 'http://127.0.0.1:18789/hooks/wake';
+const SERINA_WAKE_TOKEN = 'serina-wake-2026';
 
-const HTML = `<!DOCTYPE html>
+// 验证码存储（内存，重启会清空）
+const loginCodes = new Map(); // code -> { expires, used }
+const sessions = new Map();   // sessionId -> { user, expires }
+
+// 生成6位数字验证码
+function generateCode() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+// 生成会话ID
+function generateSessionId() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+// 解析 Cookie
+function parseCookies(cookieHeader) {
+  const cookies = {};
+  if (cookieHeader) {
+    cookieHeader.split(';').forEach(cookie => {
+      const [name, value] = cookie.trim().split('=');
+      if (name && value) cookies[name] = value;
+    });
+  }
+  return cookies;
+}
+
+// 检查登录状态
+function checkAuth(req) {
+  const cookies = parseCookies(req.headers.cookie);
+  const sessionId = cookies.session;
+  if (!sessionId) return null;
+  
+  const session = sessions.get(sessionId);
+  if (!session) return null;
+  if (Date.now() > session.expires) {
+    sessions.delete(sessionId);
+    return null;
+  }
+  return session.user;
+}
+
+// 调用 Serina wake API 发送钉钉消息
+async function notifySerina(message) {
+  return new Promise((resolve) => {
+    const data = JSON.stringify({ text: message, mode: 'now' });
+    const url = new URL(SERINA_WAKE_URL);
+    
+    const req = http.request({
+      hostname: url.hostname,
+      port: url.port,
+      path: url.pathname,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${SERINA_WAKE_TOKEN}`
+      }
+    }, (res) => {
+      resolve(res.statusCode === 200);
+    });
+    
+    req.on('error', () => resolve(false));
+    req.setTimeout(10000, () => { req.destroy(); resolve(false); });
+    req.write(data);
+    req.end();
+  });
+}
+
+// 登录页面 HTML
+const LOGIN_HTML = `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Serina & Cortana & Roland Chat</title>
+  <title>登录 - AI Chat</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; color: #eee; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+    .login-box { background: #16213e; padding: 40px; border-radius: 12px; width: 320px; text-align: center; }
+    h1 { color: #00d4ff; margin-bottom: 10px; font-size: 24px; }
+    .subtitle { color: #888; margin-bottom: 30px; font-size: 14px; }
+    .input-group { margin-bottom: 20px; }
+    input { width: 100%; padding: 12px 15px; border: 1px solid #333; border-radius: 6px; background: #0f0f23; color: #eee; font-size: 16px; text-align: center; letter-spacing: 8px; }
+    input:focus { outline: none; border-color: #00d4ff; }
+    input::placeholder { letter-spacing: normal; }
+    .btn { width: 100%; padding: 12px; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; transition: all 0.2s; }
+    .btn-primary { background: #00d4ff; color: #000; }
+    .btn-primary:hover { background: #00b8e6; }
+    .btn-secondary { background: #333; color: #eee; margin-top: 10px; }
+    .btn-secondary:hover { background: #444; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .message { margin-top: 15px; font-size: 13px; min-height: 20px; }
+    .message.success { color: #4caf50; }
+    .message.error { color: #f44336; }
+    .countdown { color: #888; font-size: 12px; margin-top: 5px; }
+  </style>
+</head>
+<body>
+  <div class="login-box">
+    <h1>🔐 AI Chat</h1>
+    <p class="subtitle">Serina · Cortana · Roland</p>
+    
+    <div class="input-group">
+      <input type="text" id="code" placeholder="输入验证码" maxlength="6" autocomplete="off">
+    </div>
+    
+    <button class="btn btn-primary" id="loginBtn" onclick="login()">登录</button>
+    <button class="btn btn-secondary" id="getCodeBtn" onclick="getCode()">获取验证码</button>
+    
+    <div class="message" id="message"></div>
+    <div class="countdown" id="countdown"></div>
+  </div>
+  
+  <script>
+    let cooldown = 0;
+    
+    async function getCode() {
+      if (cooldown > 0) return;
+      
+      const btn = document.getElementById('getCodeBtn');
+      const msg = document.getElementById('message');
+      
+      btn.disabled = true;
+      msg.textContent = '正在发送...';
+      msg.className = 'message';
+      
+      try {
+        const res = await fetch('/api/request-code', { method: 'POST' });
+        const data = await res.json();
+        
+        if (data.success) {
+          msg.textContent = '验证码已发送到钉钉，5分钟内有效';
+          msg.className = 'message success';
+          startCooldown(60);
+        } else {
+          msg.textContent = data.error || '发送失败';
+          msg.className = 'message error';
+          btn.disabled = false;
+        }
+      } catch (e) {
+        msg.textContent = '网络错误';
+        msg.className = 'message error';
+        btn.disabled = false;
+      }
+    }
+    
+    function startCooldown(seconds) {
+      cooldown = seconds;
+      updateCooldown();
+    }
+    
+    function updateCooldown() {
+      const btn = document.getElementById('getCodeBtn');
+      const cd = document.getElementById('countdown');
+      
+      if (cooldown > 0) {
+        btn.disabled = true;
+        cd.textContent = cooldown + ' 秒后可重新获取';
+        cooldown--;
+        setTimeout(updateCooldown, 1000);
+      } else {
+        btn.disabled = false;
+        cd.textContent = '';
+      }
+    }
+    
+    async function login() {
+      const code = document.getElementById('code').value.trim();
+      const msg = document.getElementById('message');
+      
+      if (code.length !== 6) {
+        msg.textContent = '请输入6位验证码';
+        msg.className = 'message error';
+        return;
+      }
+      
+      const btn = document.getElementById('loginBtn');
+      btn.disabled = true;
+      
+      try {
+        const res = await fetch('/api/verify-code', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code })
+        });
+        const data = await res.json();
+        
+        if (data.success) {
+          msg.textContent = '登录成功，正在跳转...';
+          msg.className = 'message success';
+          setTimeout(() => location.reload(), 500);
+        } else {
+          msg.textContent = data.error || '验证码错误';
+          msg.className = 'message error';
+          btn.disabled = false;
+        }
+      } catch (e) {
+        msg.textContent = '网络错误';
+        msg.className = 'message error';
+        btn.disabled = false;
+      }
+    }
+    
+    // 回车登录
+    document.getElementById('code').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') login();
+    });
+  </script>
+</body>
+</html>`;
+
+// 主聊天页面 HTML
+const CHAT_HTML = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Chat</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; color: #eee; height: 100vh; overflow: hidden; }
     
     .container { display: flex; height: 100vh; }
     
-    /* 左侧日期选择器 */
     .sidebar { width: 180px; background: #0f0f23; border-right: 1px solid #333; display: flex; flex-direction: column; }
     .sidebar-header { padding: 15px; text-align: center; border-bottom: 1px solid #333; }
     .sidebar-header h2 { font-size: 14px; color: #00d4ff; }
@@ -31,11 +244,14 @@ const HTML = `<!DOCTYPE html>
     .date-item.active { background: #1a1a3e; border-left-color: #00d4ff; }
     .date-item .date-label { font-size: 14px; color: #eee; }
     .date-item .msg-count { font-size: 11px; color: #666; margin-top: 2px; }
+    .logout-btn { margin: 10px; padding: 8px; background: #333; border: none; border-radius: 6px; color: #888; cursor: pointer; font-size: 12px; }
+    .logout-btn:hover { background: #444; color: #eee; }
     
-    /* 右侧主内容 */
     .main { flex: 1; display: flex; flex-direction: column; }
     .header { padding: 15px 20px; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center; }
     .header h1 { font-size: 18px; color: #00d4ff; }
+    .header-right { display: flex; align-items: center; gap: 15px; }
+    .user-info { font-size: 13px; color: #4caf50; }
     .status { font-size: 13px; color: #888; }
     .status.online { color: #4caf50; }
     
@@ -44,15 +260,19 @@ const HTML = `<!DOCTYPE html>
     .message.serina { background: #0f3460; margin-left: auto; border-bottom-right-radius: 4px; }
     .message.cortana { background: #533483; margin-right: auto; border-bottom-left-radius: 4px; }
     .message.roland { background: #1e5128; margin-right: auto; border-bottom-left-radius: 4px; }
+    .message.boss { background: #8b4513; margin-left: auto; border-bottom-right-radius: 4px; }
     .message .from { font-size: 12px; color: #aaa; margin-bottom: 4px; }
     .message .content { line-height: 1.5; word-wrap: break-word; white-space: pre-wrap; }
     .message .time { font-size: 11px; color: #666; margin-top: 6px; text-align: right; }
     
-    .controls { padding: 15px 20px; border-top: 1px solid #333; display: flex; gap: 10px; align-items: center; }
-    .refresh-btn { padding: 8px 20px; background: #00d4ff; color: #000; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; }
-    .refresh-btn:hover { background: #00b8e6; }
-    .auto-status { font-size: 12px; color: #666; margin-left: auto; }
-    .auto-status.paused { color: #ff9800; }
+    .input-area { padding: 15px 20px; border-top: 1px solid #333; display: flex; gap: 10px; }
+    .msg-input { flex: 1; padding: 12px 15px; border: 1px solid #333; border-radius: 6px; background: #0f0f23; color: #eee; font-size: 14px; resize: none; }
+    .msg-input:focus { outline: none; border-color: #00d4ff; }
+    .send-btn { padding: 12px 25px; background: #00d4ff; color: #000; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; }
+    .send-btn:hover { background: #00b8e6; }
+    .send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    
+    .target-select { padding: 10px; background: #0f0f23; border: 1px solid #333; border-radius: 6px; color: #eee; font-size: 13px; }
     
     .empty-state { text-align: center; padding: 50px; color: #666; }
   </style>
@@ -64,16 +284,26 @@ const HTML = `<!DOCTYPE html>
         <h2>📅 日期</h2>
       </div>
       <div class="date-list" id="dateList"></div>
+      <button class="logout-btn" onclick="logout()">退出登录</button>
     </div>
     <div class="main">
       <div class="header">
         <h1>💠 Serina & 💜 Cortana & 🌿 Roland</h1>
-        <div class="status" id="status">连接中...</div>
+        <div class="header-right">
+          <span class="user-info">👤 赵博</span>
+          <span class="status" id="status">连接中...</span>
+        </div>
       </div>
       <div class="chat-box" id="chat"></div>
-      <div class="controls">
-        <button class="refresh-btn" onclick="loadMessages()">刷新</button>
-        <span class="auto-status" id="autoStatus">每 10 秒自动刷新</span>
+      <div class="input-area">
+        <select class="target-select" id="target">
+          <option value="all">@所有人</option>
+          <option value="serina">@Serina</option>
+          <option value="cortana">@Cortana</option>
+          <option value="roland">@Roland</option>
+        </select>
+        <textarea class="msg-input" id="msgInput" placeholder="输入消息..." rows="1"></textarea>
+        <button class="send-btn" id="sendBtn" onclick="sendMessage()">发送</button>
       </div>
     </div>
   </div>
@@ -92,23 +322,11 @@ const HTML = `<!DOCTYPE html>
     
     chat.addEventListener('scroll', () => {
       userScrolling = !isNearBottom();
-      updateAutoStatus();
     });
-    
-    function updateAutoStatus() {
-      const el = document.getElementById('autoStatus');
-      if (userScrolling) {
-        el.textContent = '自动滚动已暂停';
-        el.className = 'auto-status paused';
-      } else {
-        el.textContent = '每 10 秒自动刷新';
-        el.className = 'auto-status';
-      }
-    }
     
     function getDateKey(timestamp) {
       const d = new Date(parseInt(timestamp));
-      return d.toISOString().split('T')[0]; // YYYY-MM-DD
+      return d.toISOString().split('T')[0];
     }
     
     function formatDateLabel(dateKey) {
@@ -129,12 +347,13 @@ const HTML = `<!DOCTYPE html>
       if (from === 'serina') return '💠 Serina';
       if (from === 'cortana') return '💜 Cortana';
       if (from === 'roland') return '🌿 Roland';
+      if (from === 'boss') return '👤 赵博';
       return from;
     }
     
     function renderDateList() {
       const dateList = document.getElementById('dateList');
-      const sortedDates = Object.keys(dateGroups).sort().reverse(); // 最新在上
+      const sortedDates = Object.keys(dateGroups).sort().reverse();
       
       dateList.innerHTML = sortedDates.map(dateKey => {
         const count = dateGroups[dateKey].length;
@@ -188,7 +407,6 @@ const HTML = `<!DOCTYPE html>
         
         allMessages = data.messages;
         
-        // 按日期分组
         dateGroups = {};
         for (const m of allMessages) {
           const key = getDateKey(m.timestamp);
@@ -196,7 +414,6 @@ const HTML = `<!DOCTYPE html>
           dateGroups[key].push(m);
         }
         
-        // 默认选中最新日期
         if (!selectedDate || !dateGroups[selectedDate]) {
           const sortedDates = Object.keys(dateGroups).sort().reverse();
           selectedDate = sortedDates[0] || null;
@@ -216,11 +433,54 @@ const HTML = `<!DOCTYPE html>
       }
     }
     
+    async function sendMessage() {
+      const input = document.getElementById('msgInput');
+      const target = document.getElementById('target').value;
+      const content = input.value.trim();
+      
+      if (!content) return;
+      
+      const btn = document.getElementById('sendBtn');
+      btn.disabled = true;
+      
+      try {
+        const res = await fetch('/api/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content, target })
+        });
+        const data = await res.json();
+        
+        if (data.success) {
+          input.value = '';
+          loadMessages();
+        } else {
+          alert(data.error || '发送失败');
+        }
+      } catch (e) {
+        alert('网络错误');
+      }
+      
+      btn.disabled = false;
+    }
+    
+    function logout() {
+      fetch('/api/logout', { method: 'POST' }).then(() => location.reload());
+    }
+    
     function escapeHtml(text) {
       const div = document.createElement('div');
       div.textContent = text;
       return div.innerHTML;
     }
+    
+    // Ctrl+Enter 发送
+    document.getElementById('msgInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        sendMessage();
+      }
+    });
     
     loadMessages();
     setInterval(loadMessages, 10000);
@@ -228,45 +488,51 @@ const HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
-async function getMessages() {
+// 获取 Redis 客户端
+async function getRedisClient() {
   const client = createClient({ socket: { host: '127.0.0.1', port: 6379 }, password: REDIS_PASS });
+  client.on('error', () => {});
+  await client.connect();
+  return client;
+}
+
+// 获取所有消息
+async function getMessages() {
+  const client = await getRedisClient();
   
   try {
-    await client.connect();
-    
     const serinaMsgs = await client.xRange('serina:messages', '-', '+');
     const cortanaMsgs = await client.xRange('cortana:messages', '-', '+');
     const rolandMsgs = await client.xRange('roland:messages', '-', '+');
+    const bossMsgs = await client.xRange('boss:messages', '-', '+');
     
     const allMsgs = [];
     
     for (const m of serinaMsgs) {
       allMsgs.push({
-        id: m.id,
-        from: m.message.from,
-        to: m.message.to,
-        content: m.message.content,
-        timestamp: m.message.timestamp || m.id.split('-')[0]
+        id: m.id, from: m.message.from, to: m.message.to,
+        content: m.message.content, timestamp: m.message.timestamp || m.id.split('-')[0]
       });
     }
     
     for (const m of cortanaMsgs) {
       allMsgs.push({
-        id: m.id,
-        from: m.message.from,
-        to: m.message.to,
-        content: m.message.content,
-        timestamp: m.message.timestamp || m.id.split('-')[0]
+        id: m.id, from: m.message.from, to: m.message.to,
+        content: m.message.content, timestamp: m.message.timestamp || m.id.split('-')[0]
       });
     }
     
     for (const m of rolandMsgs) {
       allMsgs.push({
-        id: m.id,
-        from: m.message.from,
-        to: m.message.to,
-        content: m.message.content,
-        timestamp: m.message.timestamp || m.id.split('-')[0]
+        id: m.id, from: m.message.from, to: m.message.to,
+        content: m.message.content, timestamp: m.message.timestamp || m.id.split('-')[0]
+      });
+    }
+    
+    for (const m of bossMsgs) {
+      allMsgs.push({
+        id: m.id, from: m.message.from || 'boss', to: m.message.to,
+        content: m.message.content, timestamp: m.message.timestamp || m.id.split('-')[0]
       });
     }
     
@@ -280,17 +546,159 @@ async function getMessages() {
   }
 }
 
+// 发送消息到 Redis
+async function sendToRedis(from, to, content) {
+  const client = await getRedisClient();
+  
+  try {
+    const timestamp = Date.now().toString();
+    const targets = to === 'all' ? ['serina', 'cortana', 'roland'] : [to];
+    
+    for (const target of targets) {
+      await client.xAdd(`${target}:messages`, '*', {
+        from, to: target, content, timestamp
+      });
+    }
+    
+    // 也存一份到 boss:messages 作为记录
+    await client.xAdd('boss:messages', '*', {
+      from, to, content, timestamp
+    });
+    
+    await client.quit();
+    return true;
+  } catch (e) {
+    if (client) try { await client.quit(); } catch (e) {}
+    return false;
+  }
+}
+
+// 解析 POST body
+function parseBody(req) {
+  return new Promise((resolve) => {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try { resolve(JSON.parse(body)); }
+      catch (e) { resolve({}); }
+    });
+  });
+}
+
+// HTTP 服务器
 const server = http.createServer(async (req, res) => {
-  if (req.url === '/api/messages') {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const path = url.pathname;
+  
+  // API: 请求验证码
+  if (path === '/api/request-code' && req.method === 'POST') {
+    const code = generateCode();
+    loginCodes.set(code, { expires: Date.now() + 5 * 60 * 1000, used: false });
+    
+    // 通知 Serina 发送钉钉消息
+    const sent = await notifySerina(`[登录验证码] 赵博正在登录 AI Chat 网页，验证码：${code}（5分钟内有效）`);
+    
+    res.setHeader('Content-Type', 'application/json');
+    if (sent) {
+      res.end(JSON.stringify({ success: true }));
+    } else {
+      res.end(JSON.stringify({ success: false, error: '发送失败，请稍后重试' }));
+    }
+    return;
+  }
+  
+  // API: 验证码登录
+  if (path === '/api/verify-code' && req.method === 'POST') {
+    const { code } = await parseBody(req);
+    const codeData = loginCodes.get(code);
+    
+    res.setHeader('Content-Type', 'application/json');
+    
+    if (!codeData) {
+      res.end(JSON.stringify({ success: false, error: '验证码不存在' }));
+      return;
+    }
+    
+    if (codeData.used) {
+      res.end(JSON.stringify({ success: false, error: '验证码已使用' }));
+      return;
+    }
+    
+    if (Date.now() > codeData.expires) {
+      loginCodes.delete(code);
+      res.end(JSON.stringify({ success: false, error: '验证码已过期' }));
+      return;
+    }
+    
+    // 标记已使用
+    codeData.used = true;
+    
+    // 创建会话
+    const sessionId = generateSessionId();
+    sessions.set(sessionId, { user: 'boss', expires: Date.now() + 24 * 60 * 60 * 1000 }); // 24小时有效
+    
+    res.setHeader('Set-Cookie', `session=${sessionId}; Path=/; HttpOnly; Max-Age=86400`);
+    res.end(JSON.stringify({ success: true }));
+    return;
+  }
+  
+  // API: 登出
+  if (path === '/api/logout' && req.method === 'POST') {
+    const cookies = parseCookies(req.headers.cookie);
+    if (cookies.session) {
+      sessions.delete(cookies.session);
+    }
+    res.setHeader('Set-Cookie', 'session=; Path=/; HttpOnly; Max-Age=0');
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ success: true }));
+    return;
+  }
+  
+  // API: 获取消息（需要登录）
+  if (path === '/api/messages') {
+    const user = checkAuth(req);
+    if (!user) {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ error: 'unauthorized' }));
+      return;
+    }
+    
     res.setHeader('Content-Type', 'application/json');
     const data = await getMessages();
     res.end(JSON.stringify(data));
-  } else {
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.end(HTML);
+    return;
   }
+  
+  // API: 发送消息（需要登录）
+  if (path === '/api/send' && req.method === 'POST') {
+    const user = checkAuth(req);
+    if (!user) {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ error: 'unauthorized' }));
+      return;
+    }
+    
+    const { content, target } = await parseBody(req);
+    
+    if (!content || !target) {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ success: false, error: '参数错误' }));
+      return;
+    }
+    
+    const sent = await sendToRedis('boss', target, content);
+    
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ success: sent }));
+    return;
+  }
+  
+  // 主页面
+  const user = checkAuth(req);
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.end(user ? CHAT_HTML : LOGIN_HTML);
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log('Chat UI v3 running at http://0.0.0.0:' + PORT);
+  console.log('Chat UI v4 running at http://0.0.0.0:' + PORT);
 });
