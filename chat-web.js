@@ -1,25 +1,60 @@
 /**
- * Redis Chat Web UI v4
- * 新增：钉钉验证码登录 + 发送消息功能
+ * Redis Chat Web UI v5
+ * 修复：连接泄漏、增量拉取、graceful shutdown
  */
 
 const http = require('http');
 const crypto = require('crypto');
 const { createClient } = require('redis');
 
-const PORT = 8888;
-const REDIS_PASS = 'SerinaCortana2026!';
-const SESSION_TTL = 24 * 60 * 60; // 24小时（秒）
+// 配置（支持环境变量）
+const PORT = process.env.PORT || 8888;
+const REDIS_HOST = process.env.REDIS_HOST || '127.0.0.1';
+const REDIS_PORT = process.env.REDIS_PORT || 6379;
+const REDIS_PASS = process.env.REDIS_PASS || 'SerinaCortana2026!';
+const SESSION_TTL = 24 * 60 * 60;
+const MSG_LIMIT = 200; // 每个 stream 最多拉取条数
 
-// 验证码存储（内存，5分钟有效，重启清空没关系）
-const loginCodes = new Map(); // code -> { expires, used }
+// 验证码存储
+const loginCodes = new Map();
 
-// 获取 Redis 客户端（复用）
+// 消息缓存（防并发重复查询）
+let msgCache = { data: null, time: 0 };
+const CACHE_TTL = 2000; // 2秒缓存
+
+// 单例 Redis 客户端
 let redisClient = null;
+
 async function getRedisClient() {
   if (redisClient && redisClient.isOpen) return redisClient;
-  redisClient = createClient({ socket: { host: '127.0.0.1', port: 6379 }, password: REDIS_PASS });
-  redisClient.on('error', () => {});
+  
+  // 如果存在但已关闭，先清理
+  if (redisClient) {
+    try { await redisClient.quit(); } catch (e) {}
+    redisClient = null;
+  }
+  
+  redisClient = createClient({
+    socket: {
+      host: REDIS_HOST,
+      port: REDIS_PORT,
+      reconnectStrategy: (retries) => {
+        if (retries > 10) {
+          console.error('[Redis] 重连失败超过10次，放弃');
+          return new Error('Max retries reached');
+        }
+        console.log(`[Redis] 重连中... 第${retries}次`);
+        return Math.min(retries * 100, 3000);
+      }
+    },
+    password: REDIS_PASS
+  });
+  
+  redisClient.on('error', (err) => console.error('[Redis] 错误:', err.message));
+  redisClient.on('end', () => console.log('[Redis] 连接关闭'));
+  redisClient.on('reconnecting', () => console.log('[Redis] 正在重连...'));
+  redisClient.on('connect', () => console.log('[Redis] 已连接'));
+  
   await redisClient.connect();
   return redisClient;
 }
@@ -81,21 +116,19 @@ async function deleteSession(sessionId) {
   } catch (e) {}
 }
 
-// 通过 Redis 通知 Serina（发到 serina:messages，她的守护进程会收到并唤醒她）
+// 通过 Redis 通知 Serina
 async function notifySerina(message) {
-  const client = createClient({ socket: { host: '127.0.0.1', port: 6379 }, password: REDIS_PASS });
   try {
-    await client.connect();
+    const client = await getRedisClient();
     await client.xAdd('serina:messages', '*', {
       from: 'system',
       to: 'serina',
       content: message,
       timestamp: Date.now().toString()
     });
-    await client.quit();
     return true;
   } catch (e) {
-    if (client) try { await client.quit(); } catch (e) {}
+    console.error('[notifySerina] 失败:', e.message);
     return false;
   }
 }
@@ -632,16 +665,22 @@ const CHAT_HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
-// 获取所有消息
+// 获取所有消息（带缓存 + 限制条数）
 async function getMessages() {
+  // 缓存检查
+  if (msgCache.data && Date.now() - msgCache.time < CACHE_TTL) {
+    return msgCache.data;
+  }
+  
   try {
     const client = await getRedisClient();
-    const serinaMsgs = await client.xRange('serina:messages', '-', '+');
-    const cortanaMsgs = await client.xRange('cortana:messages', '-', '+');
-    const rolandMsgs = await client.xRange('roland:messages', '-', '+');
+    // 使用 XREVRANGE + LIMIT 获取最新消息，避免全量扫描
+    const serinaMsgs = await client.xRevRange('serina:messages', '+', '-', { COUNT: MSG_LIMIT });
+    const cortanaMsgs = await client.xRevRange('cortana:messages', '+', '-', { COUNT: MSG_LIMIT });
+    const rolandMsgs = await client.xRevRange('roland:messages', '+', '-', { COUNT: MSG_LIMIT });
     
     const allMsgs = [];
-    const seen = new Set(); // 用于去重
+    const seen = new Set();
     
     function addMsg(m) {
       const key = `${m.message.from}:${m.message.timestamp}:${m.message.content}`;
@@ -658,8 +697,12 @@ async function getMessages() {
     for (const m of rolandMsgs) addMsg(m);
     
     allMsgs.sort((a, b) => parseInt(a.timestamp) - parseInt(b.timestamp));
-    return { messages: allMsgs };
+    
+    const result = { messages: allMsgs };
+    msgCache = { data: result, time: Date.now() };
+    return result;
   } catch (e) {
+    console.error('[getMessages] 失败:', e.message);
     return { error: e.message };
   }
 }
@@ -669,7 +712,6 @@ async function sendToRedis(from, to, content) {
   try {
     const client = await getRedisClient();
     const timestamp = Date.now().toString();
-    // 支持逗号分隔的多目标，如 "serina,cortana"
     let targets;
     if (to === 'all') {
       targets = ['serina', 'cortana', 'roland'];
@@ -683,8 +725,11 @@ async function sendToRedis(from, to, content) {
         from, to: target, content, timestamp
       });
     }
+    // 清除缓存，让下次查询能看到新消息
+    msgCache = { data: null, time: 0 };
     return true;
   } catch (e) {
+    console.error('[sendToRedis] 失败:', e.message);
     return false;
   }
 }
@@ -819,5 +864,32 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log('Chat UI v4 running at http://0.0.0.0:' + PORT);
+  console.log(`Chat UI v5 running at http://0.0.0.0:${PORT}`);
+});
+
+// Graceful shutdown
+async function shutdown(signal) {
+  console.log(`[${signal}] 正在关闭...`);
+  
+  server.close(() => {
+    console.log('[Server] HTTP 服务已关闭');
+  });
+  
+  if (redisClient) {
+    try {
+      await redisClient.quit();
+      console.log('[Redis] 连接已关闭');
+    } catch (e) {
+      console.error('[Redis] 关闭失败:', e.message);
+    }
+  }
+  
+  process.exit(0);
+}
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err);
+  shutdown('uncaughtException');
 });
