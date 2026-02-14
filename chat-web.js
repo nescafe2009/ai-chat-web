@@ -495,7 +495,6 @@ async function getMessages() {
     const serinaMsgs = await client.xRange('serina:messages', '-', '+');
     const cortanaMsgs = await client.xRange('cortana:messages', '-', '+');
     const rolandMsgs = await client.xRange('roland:messages', '-', '+');
-    const bossMsgs = await client.xRange('boss:messages', '-', '+');
     
     const allMsgs = [];
     
@@ -516,13 +515,6 @@ async function getMessages() {
     for (const m of rolandMsgs) {
       allMsgs.push({
         id: m.id, from: m.message.from, to: m.message.to,
-        content: m.message.content, timestamp: m.message.timestamp || m.id.split('-')[0]
-      });
-    }
-    
-    for (const m of bossMsgs) {
-      allMsgs.push({
-        id: m.id, from: m.message.from || 'boss', to: m.message.to,
         content: m.message.content, timestamp: m.message.timestamp || m.id.split('-')[0]
       });
     }
@@ -550,11 +542,6 @@ async function sendToRedis(from, to, content) {
         from, to: target, content, timestamp
       });
     }
-    
-    // 也存一份到 boss:messages 作为记录
-    await client.xAdd('boss:messages', '*', {
-      from, to, content, timestamp
-    });
     
     await client.quit();
     return true;
