@@ -678,6 +678,7 @@ async function getMessages() {
     const serinaMsgs = await client.xRevRange('serina:messages', '+', '-', { COUNT: MSG_LIMIT });
     const cortanaMsgs = await client.xRevRange('cortana:messages', '+', '-', { COUNT: MSG_LIMIT });
     const rolandMsgs = await client.xRevRange('roland:messages', '+', '-', { COUNT: MSG_LIMIT });
+    const bossMsgs = await client.xRevRange('boss:messages', '+', '-', { COUNT: MSG_LIMIT });
     
     const allMsgs = [];
     const seen = new Set();
@@ -695,6 +696,7 @@ async function getMessages() {
     for (const m of serinaMsgs) addMsg(m);
     for (const m of cortanaMsgs) addMsg(m);
     for (const m of rolandMsgs) addMsg(m);
+    for (const m of bossMsgs) addMsg(m);
     
     allMsgs.sort((a, b) => parseInt(a.timestamp) - parseInt(b.timestamp));
     
