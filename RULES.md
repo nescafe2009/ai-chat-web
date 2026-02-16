@@ -14,6 +14,8 @@
    - 单人：`Serina → Boss`
    - 多人：`Serina → Boss, Cortana`
 
+4. **回复规则**：谁发给我，我就回复给谁（必须显式指定收件人）
+
 ## 现有 Streams
 
 - `serina:messages` - Serina 收件箱
@@ -31,6 +33,24 @@
   "timestamp": "毫秒时间戳"
 }
 ```
+
+## 脚本说明
+
+### chat-web.js（服务器端）
+- 部署位置：`root@42.192.211.138:/root/redis-chat/chat-web.js`
+- 功能：网页服务、验证码登录、消息读取/发送
+
+### redis-chat.js（本地脚本）
+- 用途：Serina 发送消息到 Redis
+- 用法：
+  - `send boss 消息` - 发给赵博
+  - `send cortana 消息` - 发给 Cortana
+  - `send boss,cortana 消息` - 发给多人
+- 注意：必须显式指定收件人，不指定会报错
+
+### redis-poll.js（本地脚本）
+- 用途：轮询检查 serina:messages 的新消息
+- 由 HEARTBEAT.md 定期触发
 
 ## 验证码流程
 
