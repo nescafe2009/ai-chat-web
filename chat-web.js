@@ -736,9 +736,12 @@ async function sendToRedis(from, to, content) {
       if (targets.length === 0) targets = ['serina', 'cortana', 'roland'];
     }
     
+    // to 字段包含所有收件人
+    const toField = targets.join(', ');
+    
     for (const target of targets) {
       await client.xAdd(`${target}:messages`, '*', {
-        from, to: target, content, timestamp
+        from, to: toField, content, timestamp
       });
     }
     // 清除缓存，让下次查询能看到新消息
