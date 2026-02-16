@@ -139,7 +139,7 @@ const LOGIN_HTML = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>登录 - AI Chat</title>
+  <title>登录 - 枢纽</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; color: #eee; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
@@ -164,7 +164,7 @@ const LOGIN_HTML = `<!DOCTYPE html>
 </head>
 <body>
   <div class="login-box">
-    <h1>🔐 AI Chat</h1>
+    <h1>🌟 枢纽</h1>
     <p class="subtitle">Serina · Cortana · Roland</p>
     
     <div class="input-group">
@@ -282,7 +282,7 @@ const CHAT_HTML = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AI Chat</title>
+  <title>枢纽 - 星辰 Stellaris</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; color: #eee; height: 100vh; overflow: hidden; }
@@ -776,7 +776,7 @@ const server = http.createServer(async (req, res) => {
     loginCodes.set(code, { expires: Date.now() + 5 * 60 * 1000, used: false });
     
     // 通知 Serina 发送钉钉消息
-    const sent = await notifySerina(`[登录验证码] 赵博正在登录 AI Chat 网页，验证码：${code}（5分钟内有效）`);
+    const sent = await notifySerina(`[登录验证码] 赵博正在登录枢纽平台，验证码：${code}（5分钟内有效）`);
     
     res.setHeader('Content-Type', 'application/json');
     if (sent) {
