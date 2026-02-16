@@ -1,10 +1,12 @@
 /**
- * Redis Chat Web UI v5
- * 修复：连接泄漏、增量拉取、graceful shutdown
+ * 枢纽平台 (Stellaris Hub) v6
+ * 功能：聊天记录 + 档案馆
  */
 
 const http = require('http');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const { createClient } = require('redis');
 
 // 配置（支持环境变量）
@@ -14,6 +16,7 @@ const REDIS_PORT = process.env.REDIS_PORT || 6379;
 const REDIS_PASS = process.env.REDIS_PASS || 'SerinaCortana2026!';
 const SESSION_TTL = 24 * 60 * 60;
 const MSG_LIMIT = 200; // 每个 stream 最多拉取条数
+const DOCS_DIR = process.env.DOCS_DIR || path.join(__dirname, 'docs');
 
 // 验证码存储
 const loginCodes = new Map();
@@ -130,6 +133,80 @@ async function notifySerina(message) {
   } catch (e) {
     console.error('[notifySerina] 失败:', e.message);
     return false;
+  }
+}
+
+// ========== 档案馆功能 ==========
+
+// 解析 YAML frontmatter
+function parseFrontmatter(content) {
+  const match = content.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  if (!match) return { meta: {}, body: content };
+  
+  const meta = {};
+  const yamlLines = match[1].split('\n');
+  for (const line of yamlLines) {
+    const colonIdx = line.indexOf(':');
+    if (colonIdx > 0) {
+      const key = line.slice(0, colonIdx).trim();
+      let value = line.slice(colonIdx + 1).trim();
+      // 处理数组 [a, b, c]
+      if (value.startsWith('[') && value.endsWith(']')) {
+        value = value.slice(1, -1).split(',').map(s => s.trim());
+      }
+      meta[key] = value;
+    }
+  }
+  return { meta, body: match[2] };
+}
+
+// 获取档案列表
+function getDocsList() {
+  try {
+    if (!fs.existsSync(DOCS_DIR)) {
+      fs.mkdirSync(DOCS_DIR, { recursive: true });
+      return [];
+    }
+    
+    const files = fs.readdirSync(DOCS_DIR).filter(f => f.endsWith('.md'));
+    const docs = [];
+    
+    for (const file of files) {
+      const content = fs.readFileSync(path.join(DOCS_DIR, file), 'utf-8');
+      const { meta } = parseFrontmatter(content);
+      docs.push({
+        filename: file,
+        id: meta.id || file.replace('.md', ''),
+        title: meta.title || file.replace('.md', ''),
+        category: meta.category || '未分类',
+        created_at: meta.created_at || '',
+        author: meta.author || '',
+        tags: Array.isArray(meta.tags) ? meta.tags : [],
+        visibility: meta.visibility || 'internal'
+      });
+    }
+    
+    // 按日期倒序
+    docs.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+    return docs;
+  } catch (e) {
+    console.error('[getDocsList] 失败:', e.message);
+    return [];
+  }
+}
+
+// 获取单个档案内容
+function getDocContent(filename) {
+  try {
+    const filePath = path.join(DOCS_DIR, filename);
+    if (!fs.existsSync(filePath)) return null;
+    
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const { meta, body } = parseFrontmatter(content);
+    return { meta, body };
+  } catch (e) {
+    console.error('[getDocContent] 失败:', e.message);
+    return null;
   }
 }
 
@@ -342,8 +419,13 @@ const CHAT_HTML = `<!DOCTYPE html>
   <div class="container">
     <div class="sidebar">
       <div class="sidebar-header">
-        <h2>📅 日期</h2>
+        <h2>🌟 枢纽</h2>
       </div>
+      <div class="nav-links" style="padding: 10px; border-bottom: 1px solid #333;">
+        <a href="/" style="display: block; padding: 8px 12px; color: #00d4ff; text-decoration: none; background: #1a1a3e; border-radius: 6px; margin-bottom: 5px;">💬 聊天记录</a>
+        <a href="/archive" style="display: block; padding: 8px 12px; color: #888; text-decoration: none; border-radius: 6px;">📚 档案馆</a>
+      </div>
+      <div style="padding: 10px 15px; border-bottom: 1px solid #333; font-size: 12px; color: #888;">📅 日期筛选</div>
       <div class="date-list" id="dateList"></div>
       <button class="logout-btn" onclick="logout()">退出登录</button>
     </div>
@@ -679,6 +761,258 @@ const CHAT_HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
+// 档案馆页面 HTML
+const ARCHIVE_HTML = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>档案馆 - 枢纽</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; color: #eee; min-height: 100vh; }
+    
+    .container { display: flex; height: 100vh; }
+    
+    .sidebar { width: 280px; background: #0f0f23; border-right: 1px solid #333; display: flex; flex-direction: column; }
+    .sidebar-header { padding: 15px; text-align: center; border-bottom: 1px solid #333; }
+    .sidebar-header h2 { font-size: 16px; color: #00d4ff; }
+    .nav-links { padding: 10px; border-bottom: 1px solid #333; }
+    .nav-link { display: block; padding: 10px 15px; color: #888; text-decoration: none; border-radius: 6px; margin-bottom: 5px; }
+    .nav-link:hover { background: #1a1a3e; color: #eee; }
+    .nav-link.active { background: #1a1a3e; color: #00d4ff; }
+    
+    .category-filter { padding: 10px 15px; border-bottom: 1px solid #333; }
+    .category-filter label { font-size: 12px; color: #888; display: block; margin-bottom: 5px; }
+    .category-filter select { width: 100%; padding: 8px; background: #1a1a2e; border: 1px solid #333; border-radius: 4px; color: #eee; }
+    
+    .doc-list { flex: 1; overflow-y: auto; padding: 10px; }
+    .doc-item { padding: 12px; cursor: pointer; border-radius: 8px; margin-bottom: 8px; background: #16213e; border: 1px solid transparent; transition: all 0.2s; }
+    .doc-item:hover { border-color: #333; }
+    .doc-item.active { border-color: #00d4ff; }
+    .doc-item .doc-title { font-size: 14px; color: #eee; margin-bottom: 4px; }
+    .doc-item .doc-meta { font-size: 11px; color: #666; }
+    .doc-item .doc-category { display: inline-block; padding: 2px 6px; background: #333; border-radius: 3px; font-size: 10px; margin-right: 5px; }
+    
+    .logout-btn { margin: 10px; padding: 8px; background: #333; border: none; border-radius: 6px; color: #888; cursor: pointer; font-size: 12px; }
+    .logout-btn:hover { background: #444; color: #eee; }
+    
+    .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    .header { padding: 15px 20px; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center; }
+    .header h1 { font-size: 18px; color: #00d4ff; }
+    
+    .content { flex: 1; overflow-y: auto; padding: 30px 40px; }
+    .content h1 { font-size: 24px; margin-bottom: 10px; color: #00d4ff; }
+    .content h2 { font-size: 20px; margin: 25px 0 15px; color: #eee; border-bottom: 1px solid #333; padding-bottom: 8px; }
+    .content h3 { font-size: 16px; margin: 20px 0 10px; color: #ccc; }
+    .content p { line-height: 1.8; margin-bottom: 15px; }
+    .content ul, .content ol { margin: 15px 0; padding-left: 25px; }
+    .content li { line-height: 1.8; margin-bottom: 8px; }
+    .content table { width: 100%; border-collapse: collapse; margin: 15px 0; }
+    .content th, .content td { padding: 10px 12px; border: 1px solid #333; text-align: left; }
+    .content th { background: #0f0f23; }
+    .content code { background: #0f0f23; padding: 2px 6px; border-radius: 3px; font-family: monospace; }
+    .content pre { background: #0f0f23; padding: 15px; border-radius: 6px; overflow-x: auto; margin: 15px 0; }
+    .content blockquote { border-left: 3px solid #00d4ff; padding-left: 15px; margin: 15px 0; color: #aaa; }
+    .content hr { border: none; border-top: 1px solid #333; margin: 20px 0; }
+    .content strong { color: #00d4ff; }
+    
+    .doc-header { margin-bottom: 20px; padding-bottom: 15px; border-bottom: 1px solid #333; }
+    .doc-header .meta { font-size: 13px; color: #888; margin-top: 10px; }
+    .doc-header .tags { margin-top: 8px; }
+    .doc-header .tag { display: inline-block; padding: 3px 8px; background: #333; border-radius: 4px; font-size: 11px; margin-right: 5px; }
+    
+    .empty-state { text-align: center; padding: 50px; color: #666; }
+    .loading { text-align: center; padding: 50px; color: #888; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="sidebar">
+      <div class="sidebar-header">
+        <h2>🌟 星辰档案馆</h2>
+      </div>
+      <div class="nav-links">
+        <a href="/" class="nav-link">💬 聊天记录</a>
+        <a href="/archive" class="nav-link active">📚 档案馆</a>
+      </div>
+      <div class="category-filter">
+        <label>分类筛选</label>
+        <select id="categoryFilter" onchange="filterDocs()">
+          <option value="">全部</option>
+          <option value="会议纪要">会议纪要</option>
+          <option value="决策">决策</option>
+          <option value="章程">章程</option>
+        </select>
+      </div>
+      <div class="doc-list" id="docList">
+        <div class="loading">加载中...</div>
+      </div>
+      <button class="logout-btn" onclick="logout()">退出登录</button>
+    </div>
+    <div class="main">
+      <div class="header">
+        <h1>📚 档案馆</h1>
+      </div>
+      <div class="content" id="content">
+        <div class="empty-state">← 选择左侧文档查看</div>
+      </div>
+    </div>
+  </div>
+  
+  <script>
+    let allDocs = [];
+    let selectedDoc = null;
+    
+    async function loadDocs() {
+      try {
+        const res = await fetch('/api/docs');
+        const data = await res.json();
+        if (data.error) {
+          document.getElementById('docList').innerHTML = '<div class="empty-state">加载失败</div>';
+          return;
+        }
+        allDocs = data.docs;
+        renderDocList();
+      } catch (e) {
+        document.getElementById('docList').innerHTML = '<div class="empty-state">网络错误</div>';
+      }
+    }
+    
+    function filterDocs() {
+      renderDocList();
+    }
+    
+    function renderDocList() {
+      const filter = document.getElementById('categoryFilter').value;
+      const docs = filter ? allDocs.filter(d => d.category === filter) : allDocs;
+      
+      if (docs.length === 0) {
+        document.getElementById('docList').innerHTML = '<div class="empty-state">暂无文档</div>';
+        return;
+      }
+      
+      document.getElementById('docList').innerHTML = docs.map(d => {
+        const isActive = selectedDoc === d.filename;
+        return '<div class="doc-item' + (isActive ? ' active' : '') + '" onclick="selectDoc(\\'' + d.filename + '\\')">' +
+          '<div class="doc-title">' + escapeHtml(d.title) + '</div>' +
+          '<div class="doc-meta">' +
+            '<span class="doc-category">' + escapeHtml(d.category) + '</span>' +
+            d.created_at +
+          '</div>' +
+        '</div>';
+      }).join('');
+    }
+    
+    async function selectDoc(filename) {
+      selectedDoc = filename;
+      renderDocList();
+      
+      document.getElementById('content').innerHTML = '<div class="loading">加载中...</div>';
+      
+      try {
+        const res = await fetch('/api/docs/' + encodeURIComponent(filename));
+        const data = await res.json();
+        
+        if (data.error) {
+          document.getElementById('content').innerHTML = '<div class="empty-state">加载失败: ' + data.error + '</div>';
+          return;
+        }
+        
+        const meta = data.meta;
+        const tags = Array.isArray(meta.tags) ? meta.tags : [];
+        
+        let html = '<div class="doc-header">';
+        html += '<h1>' + escapeHtml(meta.title || filename) + '</h1>';
+        html += '<div class="meta">';
+        html += '<span class="doc-category">' + escapeHtml(meta.category || '未分类') + '</span>';
+        if (meta.created_at) html += ' · ' + meta.created_at;
+        if (meta.author) html += ' · 作者: ' + meta.author;
+        html += '</div>';
+        if (tags.length > 0) {
+          html += '<div class="tags">';
+          tags.forEach(t => { html += '<span class="tag">' + escapeHtml(t) + '</span>'; });
+          html += '</div>';
+        }
+        html += '</div>';
+        
+        // 简单的 Markdown 渲染
+        html += '<div class="doc-body">' + renderMarkdown(data.body) + '</div>';
+        
+        document.getElementById('content').innerHTML = html;
+      } catch (e) {
+        document.getElementById('content').innerHTML = '<div class="empty-state">网络错误</div>';
+      }
+    }
+    
+    function renderMarkdown(md) {
+      // 简单的 Markdown 转 HTML
+      let html = escapeHtml(md);
+      
+      // 代码块
+      html = html.replace(/\`\`\`([\\s\\S]*?)\`\`\`/g, '<pre><code>$1</code></pre>');
+      // 行内代码
+      html = html.replace(/\`([^\`]+)\`/g, '<code>$1</code>');
+      // 标题
+      html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+      html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+      html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+      // 粗体
+      html = html.replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>');
+      // 斜体
+      html = html.replace(/\\*(.+?)\\*/g, '<em>$1</em>');
+      // 分隔线
+      html = html.replace(/^---$/gm, '<hr>');
+      // 引用
+      html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+      // 无序列表
+      html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
+      html = html.replace(/(<li>.*<\\/li>\\n?)+/g, '<ul>$&</ul>');
+      // 有序列表
+      html = html.replace(/^\\d+\\. (.+)$/gm, '<li>$1</li>');
+      // 表格（简单处理）
+      html = html.replace(/\\|(.+)\\|/g, function(match, content) {
+        const cells = content.split('|').map(c => c.trim());
+        if (cells.every(c => /^-+$/.test(c))) return '';
+        const tag = cells[0].startsWith('**') ? 'th' : 'td';
+        return '<tr>' + cells.map(c => '<' + tag + '>' + c.replace(/\\*\\*/g, '') + '</' + tag + '>').join('') + '</tr>';
+      });
+      html = html.replace(/(<tr>.*<\\/tr>\\n?)+/g, '<table>$&</table>');
+      // 段落
+      html = html.replace(/\\n\\n/g, '</p><p>');
+      html = '<p>' + html + '</p>';
+      html = html.replace(/<p><\\/p>/g, '');
+      html = html.replace(/<p>(<h[123]>)/g, '$1');
+      html = html.replace(/(<\\/h[123]>)<\\/p>/g, '$1');
+      html = html.replace(/<p>(<ul>)/g, '$1');
+      html = html.replace(/(<\\/ul>)<\\/p>/g, '$1');
+      html = html.replace(/<p>(<table>)/g, '$1');
+      html = html.replace(/(<\\/table>)<\\/p>/g, '$1');
+      html = html.replace(/<p>(<pre>)/g, '$1');
+      html = html.replace(/(<\\/pre>)<\\/p>/g, '$1');
+      html = html.replace(/<p>(<hr>)/g, '$1');
+      html = html.replace(/(<hr>)<\\/p>/g, '$1');
+      html = html.replace(/<p>(<blockquote>)/g, '$1');
+      html = html.replace(/(<\\/blockquote>)<\\/p>/g, '$1');
+      
+      return html;
+    }
+    
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+    
+    function logout() {
+      fetch('/api/logout', { method: 'POST' }).then(() => location.href = '/');
+    }
+    
+    loadDocs();
+  </script>
+</body>
+</html>`;
+
 // 获取所有消息（带缓存 + 限制条数）
 async function getMessages() {
   // 缓存检查
@@ -768,10 +1102,10 @@ function parseBody(req) {
 // HTTP 服务器
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
-  const path = url.pathname;
+  const pathname = url.pathname;
   
   // API: 请求验证码
-  if (path === '/api/request-code' && req.method === 'POST') {
+  if (pathname === '/api/request-code' && req.method === 'POST') {
     const code = generateCode();
     loginCodes.set(code, { expires: Date.now() + 5 * 60 * 1000, used: false });
     
@@ -788,7 +1122,7 @@ const server = http.createServer(async (req, res) => {
   }
   
   // API: 验证码登录
-  if (path === '/api/verify-code' && req.method === 'POST') {
+  if (pathname === '/api/verify-code' && req.method === 'POST') {
     const { code } = await parseBody(req);
     const codeData = loginCodes.get(code);
     
@@ -826,7 +1160,7 @@ const server = http.createServer(async (req, res) => {
   }
   
   // API: 登出
-  if (path === '/api/logout' && req.method === 'POST') {
+  if (pathname === '/api/logout' && req.method === 'POST') {
     const cookies = parseCookies(req.headers.cookie);
     if (cookies.session) {
       await deleteSession(cookies.session);
@@ -838,7 +1172,7 @@ const server = http.createServer(async (req, res) => {
   }
   
   // API: 获取消息（需要登录）
-  if (path === '/api/messages') {
+  if (pathname === '/api/messages') {
     const user = await checkAuth(req);
     if (!user) {
       res.setHeader('Content-Type', 'application/json');
@@ -853,7 +1187,7 @@ const server = http.createServer(async (req, res) => {
   }
   
   // API: 发送消息（需要登录）
-  if (path === '/api/send' && req.method === 'POST') {
+  if (pathname === '/api/send' && req.method === 'POST') {
     const user = await checkAuth(req);
     if (!user) {
       res.setHeader('Content-Type', 'application/json');
@@ -876,6 +1210,58 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   
+  // API: 获取档案列表（需要登录）
+  if (pathname === '/api/docs') {
+    const user = await checkAuth(req);
+    if (!user) {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ error: 'unauthorized' }));
+      return;
+    }
+    
+    const docs = getDocsList();
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ docs }));
+    return;
+  }
+  
+  // API: 获取单个档案内容（需要登录）
+  if (pathname.startsWith('/api/docs/') && req.method === 'GET') {
+    const user = await checkAuth(req);
+    if (!user) {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ error: 'unauthorized' }));
+      return;
+    }
+    
+    const filename = decodeURIComponent(pathname.slice('/api/docs/'.length));
+    // 安全检查：防止路径遍历
+    if (filename.includes('..') || filename.includes('/')) {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ error: 'invalid filename' }));
+      return;
+    }
+    
+    const doc = getDocContent(filename);
+    if (!doc) {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ error: 'not found' }));
+      return;
+    }
+    
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify(doc));
+    return;
+  }
+  
+  // 档案馆页面
+  if (pathname === '/archive') {
+    const user = await checkAuth(req);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.end(user ? ARCHIVE_HTML : LOGIN_HTML);
+    return;
+  }
+  
   // 主页面
   const user = await checkAuth(req);
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -883,7 +1269,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Chat UI v5 running at http://0.0.0.0:${PORT}`);
+  console.log(`枢纽平台 v6 running at http://0.0.0.0:${PORT}`);
 });
 
 // Graceful shutdown
