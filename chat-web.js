@@ -434,6 +434,19 @@ const CHAT_HTML = `<!DOCTYPE html>
       chat.scrollTop = chat.scrollHeight;
     }
     
+    function formatTo(to) {
+      if (!to) return '';
+      const names = to.split(',').map(t => {
+        t = t.trim().toLowerCase();
+        if (t === 'serina') return 'Serina';
+        if (t === 'cortana') return 'Cortana';
+        if (t === 'roland') return 'Roland';
+        if (t === 'boss') return '赵博';
+        return t;
+      });
+      return names.join(', ');
+    }
+    
     function renderMessages() {
       if (!selectedDate || !dateGroups[selectedDate]) {
         chat.innerHTML = '<div class="empty-state">选择左侧日期查看消息</div>';
@@ -443,8 +456,9 @@ const CHAT_HTML = `<!DOCTYPE html>
       const msgs = dateGroups[selectedDate];
       chat.innerHTML = msgs.map(m => {
         const time = new Date(parseInt(m.timestamp)).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const toLabel = m.to ? ' → ' + formatTo(m.to) : '';
         return '<div class="message ' + m.from + '">' +
-          '<div class="from">' + getIcon(m.from) + '</div>' +
+          '<div class="from">' + getIcon(m.from) + toLabel + '</div>' +
           '<div class="content">' + escapeHtml(m.content) + '</div>' +
           '<div class="time">' + time + '</div>' +
         '</div>';
