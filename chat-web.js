@@ -136,6 +136,22 @@ async function notifySerina(message) {
   }
 }
 
+async function notifyCortana(message) {
+  try {
+    const client = await getRedisClient();
+    await client.xAdd('cortana:messages', '*', {
+      from: 'system',
+      to: 'cortana',
+      content: message,
+      timestamp: Date.now().toString()
+    });
+    return true;
+  } catch (e) {
+    console.error('[notifyCortana] 失败:', e.message);
+    return false;
+  }
+}
+
 // ========== 档案馆功能 ==========
 
 // 解析 YAML frontmatter
@@ -1116,7 +1132,7 @@ const server = http.createServer(async (req, res) => {
     loginCodes.set(code, { expires: Date.now() + 5 * 60 * 1000, used: false });
     
     // 通知 Serina 发送钉钉消息
-    const sent = await notifySerina(`[登录验证码] 赵博正在登录枢纽平台，验证码：${code}（5分钟内有效）`);
+    const sent = await notifyCortana(`[登录验证码] 赵博正在登录枢纽平台，验证码：${code}（5分钟内有效，请转发给老板）`);
     
     res.setHeader('Content-Type', 'application/json');
     if (sent) {
