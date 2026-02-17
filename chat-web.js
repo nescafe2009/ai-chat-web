@@ -632,7 +632,13 @@ const CHAT_HTML = `<!DOCTYPE html>
     function escapeHtml(text) {
       const div = document.createElement('div');
       div.textContent = text;
-      return div.innerHTML;
+      let html = div.innerHTML;
+      // 把字面量 \\n 转成真正的换行
+      html = html.replace(/\\\\n/g, '\\n');
+      // 移除 ANSI 转义码
+      html = html.replace(/\\u001b\[[0-9;]*m/g, '');
+      html = html.replace(/\x1b\[[0-9;]*m/g, '');
+      return html;
     }
     
     // @ 联想功能
