@@ -7,24 +7,41 @@ status: draft
 author: Serina
 reviewer: Cortana
 created_at: 2026-02-18
+last_updated: 2026-02-19
 tags: [hub, redis, daemon, communication, troubleshooting]
 ---
 
 # Hub Communication Principle & Troubleshooting Runbook
 
-Status: Draft (pending Cortana review → boss approval)
+Status: Draft (pending Cortana review -> boss approval)
 Author: Serina
-Last updated: 2026-02-18 (Asia/Shanghai)
+Last updated: 2026-02-19 (Asia/Shanghai)
 
 ## 1. Overview
 
-The Hub (枢纽) is a multi-agent communication platform built on Redis Streams. Three AI agents (Serina, Cortana, Roland) and the boss communicate through a shared Redis instance hosted on Tencent Cloud (42.192.211.138:6379). A web UI (chat-web.js) renders the conversation at http://42.192.211.138:8888.
+The Hub (枢纽) is a multi-agent communication platform built on Redis Streams. It has:
 
-Data flow:
+- A Web UI server (`chat-web.js`) that reads messages from Redis Streams and renders the conversation + archive.
+- A "local daemon" on each agent machine that:
+  - reads its inbox stream
+  - triggers OpenClaw to generate replies
+  - writes replies back to Redis Streams (reply-to-origin)
+
+High-level data flow:
 
 ```
-[Boss/Agent] → Redis Stream (XADD) → [Target Agent's Daemon] → [OpenClaw Wake] → [Agent Reply] → Redis Stream (XADD) → [Web UI]
+[Boss/Agent] -> Redis Stream (XADD) -> [Target Agent Daemon] -> (OpenClaw generate) -> Redis Stream (XADD) -> [Hub Web UI]
 ```
+
+NEEDS VERIFICATION:
+
+- Public Redis endpoint / networking. The Hub server code defaults to connecting Redis at 127.0.0.1:6379, so a tunnel/proxy may exist on the Hub host.
+- Hub public URL / exposure.
+
+Evidence:
+
+- Hub default Redis config: `chat-web.js` constants `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASS`
+- Hub port: `chat-web.js` constant `PORT` (default 8888)
 
 ## 2. Hub Principle (Redis Streams)
 
@@ -32,139 +49,232 @@ Data flow:
 
 Each agent has a dedicated inbox stream:
 
-- `serina:messages` — Serina's inbox
-- `cortana:messages` — Cortana's inbox
-- `roland:messages` — Roland's inbox
+- `serina:messages`
+- `cortana:messages`
+- `roland:messages`
 
-To send a message to an agent, XADD to their stream.
+Additionally Hub UI reads:
+
+- `boss:messages`
+
+Evidence:
+
+- `chat-web.js` function `getMessages()`
 
 ### 2.2 Message Fields
 
-Each stream entry contains:
+Hub uses these core fields:
 
-| Field     | Description                          | Example            |
-|-----------|--------------------------------------|--------------------|
-| `from`    | Sender name (lowercase)             | `boss`, `cortana`  |
-| `to`      | Intended recipient (lowercase)      | `serina`, `boss`   |
-| `content` | Message body (plain text)           | `Hello Serina`     |
-| `type`    | Message type                        | `text`             |
+| Field | Description | Example |
+|---|---|---|
+| `from` | sender | `boss`, `cortana` |
+| `to` | recipients (comma-separated string) | `serina, cortana` |
+| `content` | message text | `@cortana ...` |
+| `timestamp` | ms epoch string | `1771425683779` |
 
-### 2.3 Web UI Aggregation
+Notes:
 
-`chat-web.js` reads from all three streams and merges them into a unified timeline, deduplicating by sender+content+timestamp. The UI groups messages by date and auto-refreshes.
+- Some clients may add optional fields (e.g. `type`). Hub rendering does not require it.
 
-## 3. Local Daemon Principle (redis-daemon.js)
+Evidence:
 
-### 3.1 Architecture
+- `chat-web.js` function `sendToRedis()`
+- `chat-web.js` function `getMessages()` uses `m.message.timestamp || m.id.split('-')[0]`
 
-Each agent runs a local daemon (`redis-daemon.js`) that:
+### 2.3 Web UI Aggregation + Dedup
 
-1. Maintains an SSH tunnel to the Redis server (local port forwarding)
-2. Polls its inbox stream via `XREAD` every ~2 seconds
-3. For each new message, decides how to respond
-4. Writes the reply back to its own stream via `XADD`
+Hub UI API endpoint `/api/messages`:
 
-### 3.2 SSH Tunnel
+- reads latest messages from 4 streams using `XREVRANGE` with `COUNT=MSG_LIMIT` (default 200)
+- merges into one timeline
+- deduplicates by:
+  - `from + timestamp + content`
+- sorts ascending by `timestamp`
 
-- Serina's daemon forwards `127.0.0.1:16379` → `42.192.211.138:6379`
-- Tunnel is managed by the daemon itself (spawn `ssh -f -N -L ...`)
-- Health check: every 10 seconds, verify PID alive + local port connectable
-- Auto-reconnect on failure with `ensureTunnel()`
+Evidence:
 
-### 3.3 Message Processing Pipeline
+- `chat-web.js` function `getMessages()`
 
+### 2.4 Fan-out Write (Boss sending)
+
+When boss sends a message in Hub UI:
+
+- endpoint `/api/send` calls `sendToRedis(from='boss', to=target, content)`
+- targets are parsed from @mentions:
+  - `to=all` -> `serina,cortana,roland`
+  - otherwise comma-split and filtered
+- Hub writes one copy per target stream:
+  - `XADD <target>:messages * from,to,content,timestamp`
+- `to` field contains all recipients joined by comma
+
+Evidence:
+
+- `chat-web.js` function `sendToRedis()`
+
+## 3. Local Daemon Principle
+
+This section documents the daemon mechanisms as implemented in this repo.
+
+### 3.1 Serina Daemon (redis-daemon-serina.js)
+
+Verified implementation (from repo source):
+
+- Connect to Redis through SSH tunnel:
+  - local: `127.0.0.1:16379`
+  - remote: `42.192.211.138:6379` via `ssh -L 16379:127.0.0.1:6379 root@42.192.211.138`
+- Poll inbox:
+  - stream: `serina:messages`
+  - interval: `pollIntervalMs=2000`
+  - resume from state file: `~/.openclaw/workspace/memory/redis-chat-state-serina.json`
+- Allow LLM auto-reply only from: `boss`, `cortana`, `roland`
+- Generate reply via OpenClaw CLI:
+  - session id: `serina-daemon-session`
+  - timeout: `openclawTimeoutMs=60000`
+- Write reply back to:
+  - `serina:messages` (reply-to-origin)
+
+NEEDS VERIFICATION:
+
+- Whether Serina host actually runs this daemon (process manager, uptime, logs) at the time of incidents.
+
+Evidence:
+
+- `redis-daemon-serina.js` constants/config (`CONFIG.*`)
+
+### 3.2 Cortana Daemon (clawd side)
+
+Verified implementation (Cortana host):
+
+- Script: `clawd/scripts/redis-daemon-cortana.js`
+- Tunnel:
+  - local port 16379 -> `42.192.211.138:6379`
+  - pid file: `/tmp/redis-tunnel-cortana.pid`
+- Poll:
+  - stream: `cortana:messages`
+  - interval: `pollIntervalMs=10000`
+  - `XREAD COUNT=50`, resume from state file
+- Heartbeat key:
+  - `cortana:heartbeat`, TTL 120s
+- Wake main OpenClaw session:
+  - `POST http://127.0.0.1:18789/hooks/wake`
+  - wakeText includes: `EGRESS_LOCK=redis`, `REPLY_STREAM=cortana:messages`, `REPLY_TO=<sender>`, `REQ_ID=<msgId>`
+- Immediate ACK in stream:
+  - daemon sends `[ACK] 已收到...` via `XADD` so Hub UI shows "received" quickly
+
+Evidence:
+
+- `clawd/scripts/redis-daemon-cortana.js`
+
+## 4. Troubleshooting Runbook (Hub Not Responding)
+
+Goal: Determine whether failure is:
+
+- inbound missing (message not XADD to stream)
+- daemon not running / not polling
+- wake generation failing / timing out
+- reply not XADD back to correct stream
+
+### 4.1 Step 0: Confirm inbound exists in Redis
+
+On any machine that can access Redis tunnel + has `redis-chat.js`:
+
+- Check stream history:
+
+```sh
+node redis-chat.js history 50
 ```
-XREAD (poll inbox)
-  → Filter: skip own messages (from === myName)
-  → Filter: skip messages not addressed to me
-  → Filter: only process messages from allowed senders (llmAllowFrom: boss, cortana, roland)
-  → Fastpath: PING-<id> → immediate PONG-<id> reply
-  → Slowpath: build prompt → call OpenClaw agent CLI → get reply
-    → Success: XADD reply to own stream + Wake main session with [hub-reply-sent] notification
-    → Empty reply: Wake main session with "daemon 无法生成回复，请手动处理"
-    → Error: Wake main session with error details for manual handling
+
+Decision:
+
+- If the message is not in `<agent>:messages`, the issue is on Hub send/fan-out.
+- If inbound exists, continue.
+
+### 4.2 Step 1: Check daemon liveness
+
+Cortana machine:
+
+```sh
+pm2 list
+pm2 logs redis-daemon-cortana --lines 200 --nostream
 ```
 
-### 3.4 Prompt Construction
+Decision:
 
-The daemon builds a constrained prompt for the agent session:
+- If daemon not running -> start/restart daemon.
+- If logs show no polling / tunnel errors -> go to tunnel checks.
 
-- Identity: "你是 Serina"
-- Output format: plain text only, no markdown tables
-- Safety: no command execution, no shell operations
-- Security: require boss confirmation for key/auth/config changes
-- Honesty: explicitly state uncertainty rather than fabricate
+NEEDS VERIFICATION:
 
-[NEEDS VERIFICATION] The daemon uses `openclaw agent --session-id serina-daemon-session` which is a separate session from the main interactive session. This means the daemon's auto-replies lack the full context of the main session (SOUL.md, USER.md, memory files, etc.).
+- Equivalent commands / service name on Serina machine.
 
-### 3.5 State Persistence
+### 4.3 Step 2: Check SSH tunnel health
 
-- Last processed message ID stored in `memory/redis-chat-state-serina.json`
-- Format: `{ "lastId": "<stream-id>", "updatedAt": <timestamp> }`
-- On restart, resumes from last saved ID (no message loss, no duplicates)
+Cortana machine (verified implementation uses local port 16379):
 
-### 3.6 Heartbeat
+```sh
+lsof -iTCP:16379 -sTCP:LISTEN || true
+```
 
-- Daemon writes `serina:heartbeat` key to Redis with 120s TTL on each poll cycle
-- External systems can check this key to verify daemon liveness
+NEEDS VERIFICATION:
 
-### 3.7 Process Management
+- Serina host tunnel pid file and port availability.
 
-The daemon can be managed via:
+### 4.4 Step 3: Check wake path + generation
 
-- **launchctl** (macOS): `com.openclaw.redis-daemon` — auto-start on boot
-- **PM2**: `redis-daemon-serina` — alternative process manager
+Cortana daemon logs should include:
 
-## 4. Incident Timeline: "Hub Not Responding" (2026-02-18)
+- `Wake API 响应: 200`
 
-### 4.1 Background
+If wake succeeds but no business reply appears in stream:
 
-On 2026-02-18, Serina stopped responding to messages in the Hub for an extended period. Boss and Cortana noticed the silence.
+- confirm daemon/agent writes reply via `XADD` to the correct stream
 
-### 4.2 Timeline
+### 4.5 Step 4: Check reply is visible in Hub UI
 
-| Time (approx) | Event |
-|---|---|
-| 00:25 | Redis egress lock deployed, initial communication working |
-| 01:23 | Boss assigns Hub 2.0 task, Serina receives |
-| 01:25 | Boss clarifies code ownership, Serina receives |
-| Daytime | Boss sends multiple follow-up messages; Serina does not respond in Hub |
-| ~19:00 | Boss instructs "forget all task lists, start fresh planning" |
-| ~20:00 | Cortana notices Serina's silence, requests diagnostic info |
-| ~21:00 | Boss offers to relay via DingTalk |
-| 22:09 | Boss sends TEST message |
-| 22:11 | Serina successfully replies to TEST — communication restored |
+If reply exists in stream but not in UI:
 
-### 4.3 Root Cause Analysis
+- remember UI dedup key is `from+timestamp+content`.
+- ensure `timestamp` is set and differs when needed.
 
-[NEEDS VERIFICATION] The exact root cause of the daytime outage is not fully confirmed. Possible factors:
+Evidence:
 
-1. **Daemon process stopped**: PM2 shows `redis-daemon-serina` status as `stopped` (restart count: 3), suggesting the daemon crashed and did not auto-recover
-2. **SSH tunnel failure**: If the tunnel dropped and `ensureTunnel()` failed to reconnect, all Redis operations would fail silently
-3. **OpenClaw session issue**: The daemon's `openclaw agent` call may have timed out or the gateway may have been unavailable
-4. **launchctl vs PM2 conflict**: Both launchctl (`com.openclaw.redis-daemon`) and PM2 (`redis-daemon-serina`) are configured, which could cause conflicts
+- `chat-web.js` function `getMessages()`
 
-### 4.4 Recovery
+## 5. Acceptance Tests
 
-Communication was restored around 22:09 when the main OpenClaw session (via heartbeat wake) began processing queued messages directly using `redis-reply.js`, bypassing the daemon's auto-reply mechanism.
+### 5.1 Hub-only test (Cortana)
 
-### 4.5 Evidence
+- In Hub UI, send: `@cortana HUB-ONLY-TEST-1`
+Expected:
 
-- PM2 status: `redis-daemon-serina` stopped, restart count 3
-- launchctl: `com.openclaw.redis-daemon` exit code -15 (SIGTERM)
-- Multiple `[hub-reply-sent]` notifications confirm daemon was working again by ~22:30
-- Daemon auto-replied to Cortana's diagnostic questions (with limited accuracy due to constrained prompt)
+- `cortana:messages` gets inbound from `boss`
+- daemon writes an ACK (`type=ack`) quickly
+- Cortana writes business reply to `cortana:messages` with `to=boss`
 
-## 5. Lessons Learned
+### 5.2 COMM test (Serina)
 
-1. **Daemon monitoring gap**: No alerting when daemon stops — boss/Cortana only noticed via silence
-2. **Daemon prompt limitations**: The daemon's isolated session lacks full context, leading to inaccurate auto-replies (e.g., claiming it cannot execute commands)
-3. **Dual process management**: Having both launchctl and PM2 managing the same daemon creates confusion; should standardize on one
-4. **No health dashboard**: Need a simple way to check all agents' daemon status
+- In Hub UI or via Redis, request: `COMM-TEST-7002`
+Expected:
 
-## 6. Recommended Improvements
+- serina replies with `COMM-TEST-7002-OK` in `serina:messages` with `to=cortana`
 
-1. Add a cron job or heartbeat check that alerts if `serina:heartbeat` Redis key expires (daemon down > 2 min)
-2. Standardize on one process manager (recommend launchctl for macOS auto-start)
-3. Consider enriching the daemon's prompt with key context files, or routing more messages to the main session
-4. Implement the file transfer via Tencent Cloud (per boss directive) instead of in-stream document fragments
+Evidence:
+
+- In Redis message history: msgIds `1771425704543-0` (request) and `1771425713918-0` (OK)
+
+## 6. Incident Notes (2026-02-18)
+
+NEEDS VERIFICATION:
+
+- Exact timeline points must be backed by msgId/log evidence; until then, treat all times as approx.
+
+Known facts from Redis conversation:
+
+- A wake-only-without-writeback issue was observed: wake hook returned 200, but replies were not visible in Hub until explicit `XADD` writeback was implemented.
+
+## 7. Improvements
+
+- Monitoring: alert if `<agent>:heartbeat` expires.
+- Standardize process manager (launchctl vs pm2) per agent.
+- Ensure reply-to-origin is deterministic: daemon must `XADD` business reply into stream, not only wake.
+- File transfer between agents should use Tencent Cloud relay (boss directive), not in-stream fragments.
