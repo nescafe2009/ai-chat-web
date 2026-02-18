@@ -327,38 +327,41 @@ async function handleOneMessage(client, msg) {
 
   if (!from || !content) return;
 
-  // 规则 1: 只消费自己的 inbox (serina:messages)
-  // 跳过自己发出的消息，避免回复自己
-  if (from === CONFIG.myName) {
-    return;
-  }
+  if (from === CONFIG.myName) return;
 
-  // 规则 3: 判断"这是给我的"
-  // 既然已经在 serina:messages 里了，默认就是给我的
-  // 只有 to 明确指向别人（且不包含 serina）时才跳过
   if (to && !to.includes(CONFIG.myName) && to !== '') {
     log(`消息 to=${to} 不包含 ${CONFIG.myName}，跳过 from=${from}`);
     return;
   }
 
-  // 只对指定来源的消息做智能回复 (llmAllowFrom)
   if (!CONFIG.llmAllowFrom.includes(from)) {
     log(`消息 from=${from} 不在 llmAllowFrom 列表中，跳过`);
     return;
   }
 
-  // 3. 处理 Fastpath: PING-<id> (规则 4)
+  // 内部写回函数：直接用 daemon 自己的 Redis 连接
+  async function writeBack(replyContent, replyTo) {
+    const stream = `${replyTo}:messages`;
+    await client.xAdd(stream, '*', {
+      from: CONFIG.myName,
+      to: replyTo,
+      content: replyContent,
+      timestamp: Date.now().toString(),
+      type: 'text'
+    });
+  }
+
+  // Fastpath: PING-<id>
   const pingMatch = content.match(/^PING-(\S+)$/i);
   if (pingMatch) {
     const pingId = pingMatch[1];
     try {
-      // 写回 serina:messages，to=<from> (规则 7)
-      await redisChat.sendMessage(`PONG-${pingId}`, from, 'text');
+      await writeBack(`PONG-${pingId}`, from);
       log(`Fastpath PING 回复给 ${from}: PONG-${pingId}`);
     } catch (e) {
       log('Fastpath PING 回复失败: ' + e.message);
     }
-    return; // Fastpath 消息处理完毕
+    return;
   }
 
   // Slowpath: 调用 OpenClaw 生成回复，然后回写 Redis
@@ -368,15 +371,13 @@ async function handleOneMessage(client, msg) {
     const prompt = buildPrompt(from, content);
     const reply = await execOpenclawAgent(prompt);
     if (reply && reply.trim()) {
-      await redisChat.sendMessage(reply.trim(), from, 'text');
-      log(`已回写 ${CONFIG.outChannel} 给 ${from} replyTo=${msg.id}`);
-      // 同时 wake 主会话（可选，让主会话知道有新消息）
+      await writeBack(reply.trim(), from);
+      log(`已回写 ${from}:messages 给 ${from} replyTo=${msg.id}`);
       if (CONFIG.hooksToken) {
         await callWakeAPI(`[hub-reply-sent] 已在枢纽回复 ${from}: ${reply.trim().substring(0, 100)}`);
       }
     } else {
       log(`OpenClaw 返回空回复，跳过回写`);
-      // fallback: wake 主会话处理
       if (CONFIG.hooksToken) {
         const preview = content.length > 200 ? content.substring(0, 200) + '...' : content;
         const wakeText = `Redis serina:messages 有新消息（daemon 无法生成回复，请手动处理）：\n${from}: ${preview}\n\n请运行: node /Users/serina/.openclaw/workspace/projects/redis-chat-web/redis-reply.js ${from} "<你的回复>"`;
@@ -385,7 +386,6 @@ async function handleOneMessage(client, msg) {
     }
   } catch (e) {
     log(`Slowpath 回复失败: ${e.message}`);
-    // fallback: wake 主会话
     if (CONFIG.hooksToken) {
       const preview = content.length > 200 ? content.substring(0, 200) + '...' : content;
       const wakeText = `Redis serina:messages 有新消息（daemon 回复出错: ${e.message.substring(0, 100)}）：\n${from}: ${preview}\n\n请运行: node /Users/serina/.openclaw/workspace/projects/redis-chat-web/redis-reply.js ${from} "<你的回复>"`;
