@@ -256,6 +256,16 @@ const [,, cmd, ...args] = process.argv;
       }
       await sendMessage(args.slice(1).join(' '), args[0]);
       break;
+    case 'sendto':
+      // sendto <to> <message> - 和 send 一样，兼容 Cortana 版本
+      if (args.length < 2) {
+        console.error('错误：必须指定收件人和消息！');
+        console.error('用法：sendto <收件人> <消息>');
+        console.error('例如：sendto boss 你好');
+        process.exit(1);
+      }
+      await sendMessage(args.slice(1).join(' '), args[0]);
+      break;
     case 'read':
       await readMessages(args[0] || '0');
       break;

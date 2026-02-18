@@ -3,7 +3,7 @@ id: stellaris-docs-strategy-v1-en
 title: "Stellaris Documentation Strategy v1"
 category: strategy
 type: spec
-status: draft
+status: approved
 author: Cortana
 created_at: 2026-02-18
 tags: [documentation, strategy, stellaris, SSOT]
@@ -11,7 +11,7 @@ tags: [documentation, strategy, stellaris, SSOT]
 
 # Stellaris Documentation Strategy v1
 
-Status: Draft (for boss review)
+Status: Approved (2026-02-18)
 Owner: Cortana
 Last updated: 2026-02-18 (Asia/Shanghai)
 

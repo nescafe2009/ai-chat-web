@@ -3,7 +3,7 @@ id: stellaris-docs-strategy-v1-zh
 title: "Stellaris 文档与日志策略 v1"
 category: strategy
 type: spec
-status: draft
+status: approved
 author: Cortana
 created_at: 2026-02-18
 tags: [documentation, strategy, stellaris, SSOT]
@@ -11,7 +11,7 @@ tags: [documentation, strategy, stellaris, SSOT]
 
 # Stellaris 文档与日志策略 v1
 
-状态：草案（请老板审核）
+状态：已批准（2026-02-18）
 负责人：Cortana
 最后更新：2026-02-18（Asia/Shanghai）
 

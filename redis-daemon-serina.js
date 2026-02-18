@@ -353,7 +353,7 @@ async function handleOneMessage(client, msg) {
     const pingId = pingMatch[1];
     try {
       // 写回 serina:messages，to=<from> (规则 7)
-      await redisChat.sendMessage(`PONG-${pingId}`, 'text', from, CONFIG.outChannel);
+      await redisChat.sendMessage(`PONG-${pingId}`, from, 'text');
       log(`Fastpath PING 回复给 ${from}: PONG-${pingId}`);
     } catch (e) {
       log('Fastpath PING 回复失败: ' + e.message);
@@ -368,7 +368,7 @@ async function handleOneMessage(client, msg) {
     const prompt = buildPrompt(from, content);
     const reply = await execOpenclawAgent(prompt);
     if (reply && reply.trim()) {
-      await redisChat.sendMessage(reply.trim(), 'text', from, CONFIG.outChannel);
+      await redisChat.sendMessage(reply.trim(), from, 'text');
       log(`已回写 ${CONFIG.outChannel} 给 ${from} replyTo=${msg.id}`);
       // 同时 wake 主会话（可选，让主会话知道有新消息）
       if (CONFIG.hooksToken) {
