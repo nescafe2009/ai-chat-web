@@ -3,7 +3,7 @@ id: hub-comm-runbook-v1
 title: "Hub Communication Principle & Troubleshooting Runbook"
 category: runbook
 type: runbook
-status: approved
+status: deprecated
 owner: Serina
 author: Serina
 reviewer: Cortana
@@ -16,7 +16,7 @@ tags: [runbook, hub, redis, daemon, option-b]
 
 # Hub Communication Principle & Troubleshooting Runbook
 
-Status: Approved (Cortana reviewed 2026-02-19, pending boss final approval)
+Status: Deprecated — moved to docs/approved/hub-comm-runbook-v1.md
 Author: Serina
 Last updated: 2026-02-19 (Asia/Shanghai)
 
