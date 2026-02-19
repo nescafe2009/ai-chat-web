@@ -22,6 +22,41 @@ const ARCHIVE_DIR = process.env.ARCHIVE_DIR || path.join(__dirname, '..', 'stell
 const STELLARIS_DOCS_DIR = process.env.STELLARIS_DOCS_DIR || path.join(__dirname, '..', 'stellaris-docs');
 const DOCS_SINGLE_SOURCE = process.env.DOCS_SINGLE_SOURCE === 'true'; // feature flag: true = 旧单源模式
 
+// Registry 加载（doc code -> doc_id 映射）
+function loadRegistry() {
+  const reg = {};
+  const files = [
+    { source: 'archive', path: path.join(ARCHIVE_DIR, 'registry', 'archive.json') },
+    { source: 'docs', path: path.join(STELLARIS_DOCS_DIR, 'registry', 'docs.json') }
+  ];
+  for (const f of files) {
+    try {
+      if (fs.existsSync(f.path)) {
+        const data = JSON.parse(fs.readFileSync(f.path, 'utf-8'));
+        for (const [code, entry] of Object.entries(data)) {
+          reg[code] = { ...entry, code, source: f.source };
+        }
+      }
+    } catch (e) { console.error(`[Registry] 加载失败 ${f.path}:`, e.message); }
+  }
+  return reg;
+}
+let docRegistry = loadRegistry();
+// 每 60 秒刷新 registry
+setInterval(() => { docRegistry = loadRegistry(); }, 60000);
+
+function resolveByCode(code, lang) {
+  const entry = docRegistry[code];
+  if (!entry) return null;
+  const preferLang = lang || 'zh';
+  const filePath = entry.translations[preferLang] || entry.translations['zh'] || Object.values(entry.translations)[0];
+  if (!filePath) return null;
+  const baseDir = entry.source === 'archive' ? ARCHIVE_DIR : STELLARIS_DOCS_DIR;
+  const fullPath = path.join(baseDir, filePath);
+  const missingTranslation = !entry.translations[preferLang];
+  return { entry, filePath, fullPath, lang: missingTranslation ? Object.keys(entry.translations)[0] : preferLang, missingTranslation, baseDir };
+}
+
 // 验证码存储
 const loginCodes = new Map();
 
@@ -1376,6 +1411,51 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   
+  // API: 按 code 获取文档（/api/doc/SA-001?lang=zh）
+  if (pathname.startsWith('/api/doc/') && req.method === 'GET') {
+    const authed = await checkDocsAuth(req);
+    if (!authed) {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ error: 'unauthorized' }));
+      return;
+    }
+    const code = decodeURIComponent(pathname.slice('/api/doc/'.length));
+    const lang = url.searchParams.get('lang') || 'zh';
+    const resolved = resolveByCode(code, lang);
+    if (!resolved) {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ error: 'not_found', code }));
+      return;
+    }
+    if (!fs.existsSync(resolved.fullPath)) {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ error: 'file_not_found', code, path: resolved.filePath }));
+      return;
+    }
+    const content = fs.readFileSync(resolved.fullPath, 'utf-8');
+    const { meta, body } = parseFrontmatter(content);
+    const entry = resolved.entry;
+    const repoName = entry.source === 'archive' ? 'stellaris-archive' : 'stellaris-docs';
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({
+      code: entry.code,
+      doc_id: entry.doc_id,
+      source: entry.source,
+      status: entry.status,
+      lang: resolved.lang,
+      missingTranslation: resolved.missingTranslation,
+      meta,
+      body,
+      translations: entry.translations,
+      canonical: {
+        ui: `/${entry.source === 'archive' ? 'archive' : 'docs'}/${entry.code}`,
+        api: `/api/doc/${entry.code}`,
+        github: `https://github.com/nescafe2009/${repoName}/blob/main/${resolved.filePath}`
+      }
+    }));
+    return;
+  }
+
   // API: 获取单个档案内容（登录或只读 token）
   if (pathname.startsWith('/api/docs/') && req.method === 'GET') {
     const authed = await checkDocsAuth(req);
@@ -1425,6 +1505,50 @@ const server = http.createServer(async (req, res) => {
     const user = await checkAuth(req);
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.end(user ? DOCS_HTML : LOGIN_HTML);
+    return;
+  }
+
+  // 按 code 访问文档（/archive/SA-001 或 /docs/SD-001）
+  const codeMatch = pathname.match(/^\/(archive|docs)\/([A-Z]{2}-\d{3})$/);
+  if (codeMatch) {
+    const user = await checkAuth(req);
+    if (!user) {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.end(LOGIN_HTML);
+      return;
+    }
+    const code = codeMatch[2];
+    const lang = url.searchParams.get('lang') || 'zh';
+    const resolved = resolveByCode(code, lang);
+    if (!resolved || !fs.existsSync(resolved.fullPath)) {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.end(`<html><body style="background:#1a1a2e;color:#eee;font-family:sans-serif;padding:40px"><h1>404</h1><p>文档 ${code} 未找到</p><a href="/${codeMatch[1]}" style="color:#00d4ff">返回</a></body></html>`);
+      return;
+    }
+    const content = fs.readFileSync(resolved.fullPath, 'utf-8');
+    const { meta, body } = parseFrontmatter(content);
+    const entry = resolved.entry;
+    const otherLangs = Object.keys(entry.translations).filter(l => l !== resolved.lang);
+    const langSwitchHtml = otherLangs.map(l => `<a href="/${codeMatch[1]}/${code}?lang=${l}" style="color:#00d4ff;margin-left:10px">${l === 'zh' ? '中文' : 'English'}</a>`).join('');
+    const missingNote = resolved.missingTranslation ? `<div style="background:#553300;padding:8px 12px;border-radius:6px;margin-bottom:15px;color:#ffaa00">⚠️ Missing translation for "${lang}". Showing "${resolved.lang}" version.</div>` : '';
+    // 简单 markdown 渲染（复用已有逻辑）
+    const htmlBody = body.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+      .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+      .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/`([^`]+)`/g, '<code style="background:#2a2a4e;padding:2px 6px;border-radius:3px">$1</code>')
+      .replace(/^- (.+)$/gm, '<li>$1</li>')
+      .replace(/\n\n/g, '<br><br>');
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.end(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${code} - ${meta.title || entry.doc_id}</title>
+<style>body{background:#1a1a2e;color:#eee;font-family:-apple-system,sans-serif;padding:20px 40px;max-width:900px;margin:0 auto}
+a{color:#00d4ff}h1,h2,h3{color:#00d4ff;margin-top:20px}code{background:#2a2a4e;padding:2px 6px;border-radius:3px}
+.meta{color:#888;font-size:13px;margin-bottom:20px}.nav{margin-bottom:20px}li{margin:4px 0}</style></head><body>
+<div class="nav"><a href="/${codeMatch[1]}">← 返回${codeMatch[1] === 'archive' ? '档案馆' : '文档库'}</a>${langSwitchHtml}</div>
+<div class="meta">${code} | ${entry.doc_id} | ${entry.status} | ${resolved.lang}</div>
+${missingNote}
+<div class="content">${htmlBody}</div></body></html>`);
     return;
   }
   
