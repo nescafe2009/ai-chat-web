@@ -1513,6 +1513,8 @@ const server = http.createServer(async (req, res) => {
     }
     const status = url.searchParams.get('status');
     if (status) docs = docs.filter(d => d.status && d.status.toLowerCase() === status.toLowerCase());
+    const category = url.searchParams.get('category');
+    if (category) docs = docs.filter(d => d.category && d.category.toLowerCase() === category.toLowerCase());
     
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ docs, categoryDisplay: CATEGORY_DISPLAY }));
