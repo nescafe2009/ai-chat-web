@@ -220,7 +220,7 @@ function parseFrontmatter(content) {
 }
 
 // 获取档案列表（支持多源扫描）
-function getDocsList(sourceFilter) {
+function getDocsList(sourceFilter, preferLang) {
   try {
     const docs = [];
     
@@ -296,11 +296,12 @@ function getDocsList(sourceFilter) {
       return (b.created_at || '').localeCompare(a.created_at || '');
     });
 
-    // 去重：同一个 doc_id+source 只保留一条（优先 zh，避免列表重复）
+    // 去重：同一个 doc_id+source 只保留一条（优先请求的语言）
     const seen = new Set();
     const deduped = [];
-    // 先把 zh 排前面
-    docs.sort((a, b) => (a.lang === 'zh' ? -1 : 1) - (b.lang === 'zh' ? -1 : 1));
+    const pLang = preferLang || 'zh';
+    // 先把优先语言排前面
+    docs.sort((a, b) => (a.lang === pLang ? -1 : 1) - (b.lang === pLang ? -1 : 1));
     for (const doc of docs) {
       const key = doc.id + '|' + doc.source;
       if (!seen.has(key)) {
@@ -1065,7 +1066,7 @@ const ARCHIVE_HTML = `<!DOCTYPE html>
     
     async function loadDocs() {
       try {
-        const res = await fetch('/api/docs?source=archive');
+        const res = await fetch('/api/docs?source=archive&lang=' + currentLang);
         const data = await res.json();
         if (data.error) {
           document.getElementById('docList').innerHTML = '<div class="empty-state">加载失败</div>';
@@ -1251,7 +1252,7 @@ const DOCS_HTML = ARCHIVE_HTML
   .replace('<a href="/docs" class="nav-link">📖 文档库</a>', '<a href="/docs" class="nav-link active">📖 文档库</a>')
   .replace('<h1>📜 档案馆</h1>', '<h1>📖 文档库</h1>')
   .replace('治理层文档 — 组织核心文件', '工作层文档 — Runbooks / Specs / Templates')
-  .replace("fetch('/api/docs?source=archive')", "fetch('/api/docs?source=docs')");
+  .replace("fetch('/api/docs?source=archive&lang=' + currentLang)", "fetch('/api/docs?source=docs&lang=' + currentLang)");
 
 // 获取所有消息（带缓存 + 限制条数）
 async function getMessages() {
@@ -1468,7 +1469,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     
-    let docs = getDocsList(url.searchParams.get('source') || null);
+    let docs = getDocsList(url.searchParams.get('source') || null, url.searchParams.get('lang') || null);
     // 服务端搜索
     const q = (url.searchParams.get('q') || '').toLowerCase().trim();
     if (q) {
