@@ -239,8 +239,9 @@ function getDocsList() {
 // 获取单个档案内容（支持子目录路径）
 function getDocContent(filename) {
   try {
-    // 安全检查：防止路径遍历
-    const normalized = path.normalize(filename).replace(/\.\./g, '');
+    // 安全检查：显式拒绝路径遍历
+    if (filename.includes('..')) return { error: 'path_traversal_rejected', code: 403 };
+    const normalized = path.normalize(filename);
     let filePath;
     if (normalized.startsWith('journals/') || normalized.startsWith('journals\\')) {
       filePath = path.join(__dirname, normalized);
@@ -248,7 +249,7 @@ function getDocContent(filename) {
       filePath = path.join(DOCS_DIR, normalized);
     }
     const allowedDirs = [DOCS_DIR, JOURNALS_DIR];
-    if (!allowedDirs.some(d => filePath.startsWith(d))) return null;
+    if (!allowedDirs.some(d => filePath.startsWith(d))) return { error: 'path_outside_allowed_dirs', code: 403 };
     if (!fs.existsSync(filePath)) return null;
     
     const content = fs.readFileSync(filePath, 'utf-8');
@@ -1314,14 +1315,21 @@ const server = http.createServer(async (req, res) => {
     }
     
     const filename = decodeURIComponent(pathname.slice('/api/docs/'.length));
-    // 安全检查：防止路径遍历
-    if (filename.includes('..') || filename.includes('/')) {
+    // 安全检查：防止路径遍历（允许子目录斜杠，但拒绝 ..）
+    if (filename.includes('..')) {
+      res.writeHead(403);
       res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ error: 'invalid filename' }));
+      res.end(JSON.stringify({ error: 'path_traversal_rejected', code: 403 }));
       return;
     }
     
     const doc = getDocContent(filename);
+    if (doc && doc.error) {
+      res.writeHead(doc.code || 403);
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ error: doc.error }));
+      return;
+    }
     if (!doc) {
       res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify({ error: 'not found' }));
