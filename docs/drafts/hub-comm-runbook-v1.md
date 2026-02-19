@@ -4,10 +4,14 @@ title: "Hub Communication Principle & Troubleshooting Runbook"
 category: runbook
 type: runbook
 status: draft
+owner: Serina
 author: Serina
 reviewer: Cortana
+version: "1.0"
+applies_to: all
 created_at: 2026-02-18
 last_updated: 2026-02-19
+tags: [runbook, hub, redis, daemon, option-b]
 tags: [hub, redis, daemon, communication, troubleshooting]
 ---
 
