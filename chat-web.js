@@ -209,6 +209,10 @@ function parseFrontmatter(content) {
       if (value.startsWith('[') && value.endsWith(']')) {
         value = value.slice(1, -1).split(',').map(s => s.trim());
       }
+      // 去掉 YAML 字符串引号
+      if (typeof value === 'string' && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) {
+        value = value.slice(1, -1);
+      }
       meta[key] = value;
     }
   }
