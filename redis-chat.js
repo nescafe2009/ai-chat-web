@@ -96,7 +96,7 @@ function logMessage(direction, peer, content, msgId) {
 }
 
 // 发送消息（必须显式指定收件人）
-async function sendMessage(content, to, type = 'text') {
+async function sendMessage(content, to, type = 'text', streamOverride) {
   if (!to) {
     console.error('错误：必须指定收件人！');
     console.error('用法：send <收件人> <消息>');
@@ -116,7 +116,7 @@ async function sendMessage(content, to, type = 'text') {
     
     let lastMsgId;
     for (const recipient of recipients) {
-      const stream = `${recipient}:messages`;
+      const stream = streamOverride || `${recipient}:messages`;
       lastMsgId = await client.xAdd(stream, '*', {
         from: CONFIG.myName,
         to: toField,
