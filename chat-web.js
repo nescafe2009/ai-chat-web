@@ -176,34 +176,53 @@ function parseFrontmatter(content) {
   return { meta, body: match[2] };
 }
 
-// 获取档案列表
+// 获取档案列表（递归扫描子目录）
 function getDocsList() {
   try {
     if (!fs.existsSync(DOCS_DIR)) {
       fs.mkdirSync(DOCS_DIR, { recursive: true });
       return [];
     }
-    
-    const files = fs.readdirSync(DOCS_DIR).filter(f => f.endsWith('.md'));
+
     const docs = [];
-    
-    for (const file of files) {
-      const content = fs.readFileSync(path.join(DOCS_DIR, file), 'utf-8');
-      const { meta } = parseFrontmatter(content);
-      docs.push({
-        filename: file,
-        id: meta.id || file.replace('.md', ''),
-        title: meta.title || file.replace('.md', ''),
-        category: meta.category || '未分类',
-        created_at: meta.created_at || '',
-        author: meta.author || '',
-        tags: Array.isArray(meta.tags) ? meta.tags : [],
-        visibility: meta.visibility || 'internal'
-      });
+    function scanDir(dir, prefix) {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.name.startsWith('.')) continue;
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          scanDir(fullPath, prefix ? prefix + '/' + entry.name : entry.name);
+        } else if (entry.name.endsWith('.md')) {
+          const relPath = prefix ? prefix + '/' + entry.name : entry.name;
+          const content = fs.readFileSync(fullPath, 'utf-8');
+          const { meta } = parseFrontmatter(content);
+          const section = prefix ? prefix.split('/')[0] : '';
+          const statusMap = { 'approved': 'Approved', 'drafts': 'Draft' };
+          const status = meta.status || statusMap[section] || '';
+          docs.push({
+            filename: relPath,
+            id: meta.id || entry.name.replace('.md', ''),
+            title: meta.title || entry.name.replace('.md', ''),
+            category: meta.category || meta.type || section || '未分类',
+            section: section,
+            status: status,
+            created_at: meta.created_at || '',
+            author: meta.author || '',
+            tags: Array.isArray(meta.tags) ? meta.tags : [],
+            visibility: meta.visibility || 'internal'
+          });
+        }
+      }
     }
-    
-    // 按日期倒序
-    docs.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+    scanDir(DOCS_DIR, '');
+
+    // 按 status 权重 + 日期倒序
+    const statusWeight = { 'Approved': 0, 'Draft': 1, '': 2 };
+    docs.sort((a, b) => {
+      const w = (statusWeight[a.status] || 2) - (statusWeight[b.status] || 2);
+      if (w !== 0) return w;
+      return (b.created_at || '').localeCompare(a.created_at || '');
+    });
     return docs;
   } catch (e) {
     console.error('[getDocsList] 失败:', e.message);
@@ -211,10 +230,13 @@ function getDocsList() {
   }
 }
 
-// 获取单个档案内容
+// 获取单个档案内容（支持子目录路径）
 function getDocContent(filename) {
   try {
-    const filePath = path.join(DOCS_DIR, filename);
+    // 安全检查：防止路径遍历
+    const normalized = path.normalize(filename).replace(/\.\./g, '');
+    const filePath = path.join(DOCS_DIR, normalized);
+    if (!filePath.startsWith(DOCS_DIR)) return null;
     if (!fs.existsSync(filePath)) return null;
     
     const content = fs.readFileSync(filePath, 'utf-8');
@@ -859,12 +881,15 @@ const ARCHIVE_HTML = `<!DOCTYPE html>
         <a href="/archive" class="nav-link active">📚 档案馆</a>
       </div>
       <div class="category-filter">
-        <label>分类筛选</label>
+        <label>状态筛选</label>
+        <select id="statusFilter" onchange="filterDocs()">
+          <option value="">全部</option>
+          <option value="Approved">✅ Approved</option>
+          <option value="Draft">📝 Draft</option>
+        </select>
+        <label style="margin-top:8px">目录筛选</label>
         <select id="categoryFilter" onchange="filterDocs()">
           <option value="">全部</option>
-          <option value="会议纪要">会议纪要</option>
-          <option value="决策">决策</option>
-          <option value="章程">章程</option>
         </select>
       </div>
       <div class="doc-list" id="docList">
@@ -895,6 +920,10 @@ const ARCHIVE_HTML = `<!DOCTYPE html>
           return;
         }
         allDocs = data.docs;
+        // 动态填充目录筛选器
+        const sections = [...new Set(allDocs.map(d => d.section).filter(Boolean))];
+        const catSel = document.getElementById('categoryFilter');
+        sections.forEach(s => { const o = document.createElement('option'); o.value = s; o.textContent = s; catSel.appendChild(o); });
         renderDocList();
       } catch (e) {
         document.getElementById('docList').innerHTML = '<div class="empty-state">网络错误</div>';
@@ -906,21 +935,28 @@ const ARCHIVE_HTML = `<!DOCTYPE html>
     }
     
     function renderDocList() {
-      const filter = document.getElementById('categoryFilter').value;
-      const docs = filter ? allDocs.filter(d => d.category === filter) : allDocs;
+      const statusF = document.getElementById('statusFilter').value;
+      const catF = document.getElementById('categoryFilter').value;
+      let docs = allDocs;
+      if (statusF) docs = docs.filter(d => d.status === statusF);
+      if (catF) docs = docs.filter(d => d.section === catF);
       
       if (docs.length === 0) {
         document.getElementById('docList').innerHTML = '<div class="empty-state">暂无文档</div>';
         return;
       }
       
+      const statusColors = { 'Approved': '#00c853', 'Draft': '#ff9800' };
       document.getElementById('docList').innerHTML = docs.map(d => {
         const isActive = selectedDoc === d.filename;
-        return '<div class="doc-item' + (isActive ? ' active' : '') + '" onclick="selectDoc(\\'' + d.filename + '\\')">' +
+        const statusBadge = d.status ? '<span style="display:inline-block;padding:2px 6px;background:' + (statusColors[d.status] || '#333') + ';border-radius:3px;font-size:10px;margin-right:5px;color:#fff">' + d.status + '</span>' : '';
+        return '<div class="doc-item' + (isActive ? ' active' : '') + '" onclick="selectDoc(\\'' + d.filename.replace(/'/g, "\\\\'") + '\\')">' +
           '<div class="doc-title">' + escapeHtml(d.title) + '</div>' +
           '<div class="doc-meta">' +
+            statusBadge +
             '<span class="doc-category">' + escapeHtml(d.category) + '</span>' +
-            d.created_at +
+            (d.section ? ' <span class="doc-category">' + escapeHtml(d.section) + '</span>' : '') +
+            ' ' + d.created_at +
           '</div>' +
         '</div>';
       }).join('');
@@ -947,9 +983,14 @@ const ARCHIVE_HTML = `<!DOCTYPE html>
         let html = '<div class="doc-header">';
         html += '<h1>' + escapeHtml(meta.title || filename) + '</h1>';
         html += '<div class="meta">';
-        html += '<span class="doc-category">' + escapeHtml(meta.category || '未分类') + '</span>';
+        if (meta.status) {
+          const sc = meta.status.toLowerCase() === 'approved' ? '#00c853' : '#ff9800';
+          html += '<span style="display:inline-block;padding:2px 8px;background:' + sc + ';border-radius:4px;font-size:12px;color:#fff;margin-right:8px">' + escapeHtml(meta.status) + '</span>';
+        }
+        html += '<span class="doc-category">' + escapeHtml(meta.category || meta.type || '未分类') + '</span>';
         if (meta.created_at) html += ' · ' + meta.created_at;
         if (meta.author) html += ' · 作者: ' + meta.author;
+        if (meta.reviewer) html += ' · 审阅: ' + meta.reviewer;
         html += '</div>';
         if (tags.length > 0) {
           html += '<div class="tags">';
