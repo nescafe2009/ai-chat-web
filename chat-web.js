@@ -1049,6 +1049,8 @@ const ARCHIVE_HTML = `<!DOCTYPE html>
       currentLang = lang;
       localStorage.setItem('ui.lang', lang);
       updateLangButtons();
+      // 重新加载列表和当前文档
+      loadDocs();
       if (selectedDoc) selectDoc(selectedDoc);
     }
     function updateLangButtons() {
