@@ -416,3 +416,11 @@ Changes:
 - kill -9 PID 74348 → auto-restart PID 74541 after 5s
 - max_restarts=20, restart_delay=5000ms
 - pm2 save confirmed
+
+### Archival Evidence (First Runbook Graduation)
+
+- Runbook revision + VERIFIED: commit `78a1f2d`
+- Upgrade to Approved + non-blocking fixes: commit `65bc253`
+- Drafts cleanup (Deprecated): commit `5a0e53c`
+- Cortana review: PASS (via readonly API `/api/docs/approved%2Fhub-comm-runbook-v1.md`, meta.status=approved confirmed)
+- Cortana index updated: `docs/hub/README.md` entry points to `docs/approved/hub-comm-runbook-v1.md`
