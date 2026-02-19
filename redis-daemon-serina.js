@@ -246,9 +246,14 @@ async function handleOneMessage(client, msg) {
       const contextMsgs = recent.slice(1).reverse();
       let contextText = '';
       let truncated = false;
+      const PER_MSG_MAX_CHARS = 500;
       for (const m of contextMsgs) {
         const f = m.message || {};
-        const line = `[${f.from || '?'}] ${(f.content || '').substring(0, 300)}`;
+        const rawContent = (f.content || '');
+        const msgContent = rawContent.length > PER_MSG_MAX_CHARS
+          ? rawContent.substring(0, PER_MSG_MAX_CHARS) + `[TRUNCATED_PER_MSG origChars=${rawContent.length}]`
+          : rawContent;
+        const line = `[${f.from || '?'}] ${msgContent}`;
         if (contextText.length + line.length > CONTEXT_MAX_CHARS) {
           truncated = true;
           break;
