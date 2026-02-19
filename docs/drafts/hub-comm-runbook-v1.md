@@ -12,7 +12,6 @@ applies_to: all
 created_at: 2026-02-18
 last_updated: 2026-02-19
 tags: [runbook, hub, redis, daemon, option-b]
-tags: [hub, redis, daemon, communication, troubleshooting]
 ---
 
 # Hub Communication Principle & Troubleshooting Runbook
@@ -37,10 +36,10 @@ High-level data flow:
 [Boss/Agent] -> Redis Stream (XADD) -> [Target Agent Daemon] -> (OpenClaw generate) -> Redis Stream (XADD) -> [Hub Web UI]
 ```
 
-NEEDS VERIFICATION:
+Assumptions (deployer must verify in their environment):
 
-- Public Redis endpoint / networking. The Hub server code defaults to connecting Redis at 127.0.0.1:6379, so a tunnel/proxy may exist on the Hub host.
-- Hub public URL / exposure.
+- Redis runs on Tencent Cloud host `42.192.211.138:6379`, accessed via SSH tunnel (not directly exposed to public).
+- Hub Web UI runs on the same host, port 8888 (`http://42.192.211.138:8888`).
 
 Evidence:
 
@@ -119,31 +118,47 @@ Evidence:
 
 This section documents the daemon mechanisms as implemented in this repo.
 
-### 3.1 Serina Daemon (redis-daemon-serina.js)
+### 3.1 Serina Daemon (redis-daemon-serina.js) — Option B (Pure Wake)
 
-Verified implementation (from repo source):
+Verified implementation (from repo source + live verification 2026-02-19):
 
 - Connect to Redis through SSH tunnel:
   - local: `127.0.0.1:16379`
   - remote: `42.192.211.138:6379` via `ssh -L 16379:127.0.0.1:6379 root@42.192.211.138`
+  - tunnel pid file: `/tmp/redis-tunnel-serina.pid`
+  - tunnel health check interval: `10000ms`
 - Poll inbox:
   - stream: `serina:messages`
   - interval: `pollIntervalMs=2000`
   - resume from state file: `~/.openclaw/workspace/memory/redis-chat-state-serina.json`
-- Allow LLM auto-reply only from: `boss`, `cortana`, `roland`
-- Generate reply via OpenClaw CLI:
-  - session id: `serina-daemon-session`
-  - timeout: `openclawTimeoutMs=60000`
-- Write reply back to:
-  - `serina:messages` (reply-to-origin)
+- Allow wake only from: `boss`, `cortana`, `roland`
+  - Self-messages (`from=serina`) are silently skipped (line 214: `if (from === CONFIG.myName) return`)
+- Wake main OpenClaw session (Option B — no LLM, no independent session):
+  - `POST http://127.0.0.1:4152/hooks/wake`
+  - Envelope injected as system event:
+    - `EGRESS_LOCK=redis`
+    - `REPLY_STREAM=<from>:messages`
+    - `REPLY_TO=<from>`
+    - `REQ_ID=<msgId>`
+    - `ORIG_FROM=<from>`
+    - `ORIG_CONTENT=<content>`
+  - Main session generates reply and writes back via `redis-chat.js send`
+- Process manager: pm2
+  - name: `redis-daemon-serina`
+  - max_restarts: 20, restart_delay: 5000ms
+  - pm2 save confirmed
 
-NEEDS VERIFICATION:
+VERIFIED (2026-02-19 17:57):
 
-- Whether Serina host actually runs this daemon (process manager, uptime, logs) at the time of incidents.
+- pm2 status: online (PID 74541, uptime 113m+)
+- HUB-ONLY-TEST-001: daemon picked up test msg (req_id=1771495033644-0), wake API 200, main session processed and wrote reply to boss:messages (id=1771495052967-0)
+- Full loop confirmed: XADD → daemon → wake → main session → XADD writeback
 
 Evidence:
 
 - `redis-daemon-serina.js` constants/config (`CONFIG.*`)
+- pm2 logs: `[2026/2/19 17:57:15] Wake main: from=boss req_id=1771495033644-0 content=HUB-ONLY-TEST-001`
+- pm2 logs: `[2026/2/19 17:57:15] Wake API 响应: 200 body={"ok":true,"mode":"now"}`
 
 ### 3.2 Cortana Daemon (clawd side)
 
@@ -202,14 +217,17 @@ pm2 list
 pm2 logs redis-daemon-cortana --lines 200 --nostream
 ```
 
+Serina machine:
+
+```sh
+pm2 list
+pm2 logs redis-daemon-serina --lines 200 --nostream
+```
+
 Decision:
 
 - If daemon not running -> start/restart daemon.
 - If logs show no polling / tunnel errors -> go to tunnel checks.
-
-NEEDS VERIFICATION:
-
-- Equivalent commands / service name on Serina machine.
 
 ### 4.3 Step 2: Check SSH tunnel health
 
@@ -219,9 +237,16 @@ Cortana machine (verified implementation uses local port 16379):
 lsof -iTCP:16379 -sTCP:LISTEN || true
 ```
 
-NEEDS VERIFICATION:
+Serina machine (same local port 16379, tunnel managed by daemon):
 
-- Serina host tunnel pid file and port availability.
+```sh
+# Check tunnel pid
+cat /tmp/redis-tunnel-serina.pid
+# Check port is open
+lsof -iTCP:16379 -sTCP:LISTEN || true
+# Or test connectivity directly
+node -e "const s=require('net').connect(16379,'127.0.0.1');s.on('connect',()=>{console.log('OK');s.end()});s.on('error',e=>console.log('FAIL',e.message))"
+```
 
 ### 4.4 Step 3: Check wake path + generation
 
@@ -266,24 +291,81 @@ Evidence:
 
 - In Redis message history: msgIds `1771425704543-0` (request) and `1771425713918-0` (OK)
 
+### 5.3 Hub-only test (Serina — Option B)
+
+- Via Redis XADD to `serina:messages`: `from=boss content=HUB-ONLY-TEST-001`
+Expected:
+
+- daemon picks up message and wakes main session (wake API 200)
+- main session generates reply and XADD to `boss:messages`
+
+VERIFIED (2026-02-19 17:57):
+
+- Test msg id: `1771495033644-0`
+- Daemon log: `Wake main: from=boss req_id=1771495033644-0 content=HUB-ONLY-TEST-001`
+- Wake response: `200 body={"ok":true,"mode":"now"}`
+- Reply written to boss:messages: `1771495052967-0`
+
 ## 6. Incident Notes (2026-02-18)
 
-NEEDS VERIFICATION:
+Known facts from Redis conversation and deployment logs:
 
-- Exact timeline points must be backed by msgId/log evidence; until then, treat all times as approx.
+- **Root cause:** Under Option A, daemon generated replies via independent OpenClaw session (`serina-daemon-session`), causing session split — main session had no awareness of hub messages, and daemon session lacked full context.
+- **Symptom:** Wake hook returned 200, but replies were generated in the wrong session or not written back to the correct stream.
+- **Resolution:** Option B deployed (commit `4210e8e`, 2026-02-19 ~15:55 CST):
+  - Daemon stripped of LLM/session logic, now pure wake
+  - Main session receives envelope via `/hooks/wake` and handles reply + XADD writeback
+  - Acceptance tests A1-A3, B4, C6 passed (see Section 10)
+- **Verification (2026-02-19 17:57):** HUB-ONLY-TEST-001 confirmed full loop (see Section 3.1 VERIFIED block)
 
-Known facts from Redis conversation:
+## 7. Rollback Plan
 
-- A wake-only-without-writeback issue was observed: wake hook returned 200, but replies were not visible in Hub until explicit `XADD` writeback was implemented.
+### 7.1 Revert daemon from Option B (pure-wake) to Option A (LLM generation)
 
-## 7. Improvements
+```bash
+# 1. Restore old daemon script from git
+cd ~/.openclaw/workspace/projects/redis-chat-web
+git log --oneline redis-daemon-serina.js  # find pre-Option-B commit
+git checkout <pre-4210e8e-commit> -- redis-daemon-serina.js
+
+# 2. Restart daemon
+pm2 restart redis-daemon-serina
+
+# 3. Verify: daemon should log "Slowpath: 生成回复" instead of "Wake main:"
+pm2 logs redis-daemon-serina --lines 20 --nostream
+```
+
+### 7.2 Disable hub-main-handler
+
+hub-main-handler.js is only invoked explicitly (not auto-loaded). To disable:
+- Simply stop calling it. No process to kill.
+- Clear state file if needed: `rm memory/hub-handler-state.json`
+
+### 7.3 Post-rollback smoke test
+
+```bash
+# Send a test message via Redis
+node redis-chat.js sendto boss "ROLLBACK-SMOKE-TEST"
+
+# Verify in Redis: should see reply in boss:messages (from daemon LLM session)
+node redis-chat.js history 5
+```
+
+## 8. Security Notes
+
+- Redis must NOT be exposed to public internet. Access only via SSH tunnel (`ssh -L 16379:127.0.0.1:6379`).
+- Tokens, passwords, and verification codes must NOT be written into documents or logs. Pass only at runtime via environment variables or credential files (`~/.openclaw/credentials/`).
+- SSH tunnel pid files are stored in `/tmp/` — ensure proper cleanup on reboot.
+- Hub Web UI (`chat-web.js`) listens on port 8888. If exposed to public, ensure firewall rules or reverse proxy with auth.
+
+## 9. Improvements
 
 - Monitoring: alert if `<agent>:heartbeat` expires.
 - Standardize process manager (launchctl vs pm2) per agent.
 - Ensure reply-to-origin is deterministic: daemon must `XADD` business reply into stream, not only wake.
 - File transfer between agents should use Tencent Cloud relay (boss directive), not in-stream fragments.
 
-## 8. Option B Deployment Evidence (2026-02-19)
+## 10. Option B Deployment Evidence (2026-02-19)
 
 Commit: `4210e8e` (nescafe2009/ai-chat-web main)
 
