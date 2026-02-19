@@ -250,9 +250,14 @@ async function handleOneMessage(client, msg) {
       for (const m of contextMsgs) {
         const f = m.message || {};
         const rawContent = (f.content || '');
-        const msgContent = rawContent.length > PER_MSG_MAX_CHARS
-          ? rawContent.substring(0, PER_MSG_MAX_CHARS) + `[TRUNCATED_PER_MSG origChars=${rawContent.length}]`
-          : rawContent;
+        let msgContent;
+        if (rawContent.length > PER_MSG_MAX_CHARS) {
+          const head = rawContent.substring(0, 200);
+          const tail = rawContent.substring(rawContent.length - 200);
+          msgContent = `${head}...[TRUNCATED_PER_MSG origChars=${rawContent.length} msgId=${m.id}]...${tail}`;
+        } else {
+          msgContent = rawContent;
+        }
         const line = `[${f.from || '?'}] ${msgContent}`;
         if (contextText.length + line.length > CONTEXT_MAX_CHARS) {
           truncated = true;
