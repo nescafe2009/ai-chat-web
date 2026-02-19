@@ -276,8 +276,8 @@ function getDocsList(sourceFilter, preferLang) {
           const content = fs.readFileSync(fullPath, 'utf-8');
           const { meta } = parseFrontmatter(content);
           const section = prefix ? prefix.split('/')[0] : '';
-          const statusMap = { 'approved': 'Approved', 'drafts': 'Draft', 'deprecated': 'Deprecated' };
-          const status = meta.status || statusMap[section] || 'unreviewed';
+          const statusMap = { 'approved': 'approved', 'drafts': 'draft', 'deprecated': 'deprecated' };
+          const status = (meta.status || statusMap[section] || 'unreviewed').toLowerCase();
           // doc_id 优先级：frontmatter doc_id > frontmatter id > 文件名（去掉 .zh/.en.md）
           const docId = meta.doc_id || meta.id || entry.name.replace(/\.(zh|en)\.md$/, '').replace('.md', '');
           // 从 registry 反查 code
@@ -326,7 +326,7 @@ function getDocsList(sourceFilter, preferLang) {
 
     // 按 source 权重 + status 权重 + 日期倒序
     const sourceWeight = { 'archive': 0, 'docs': 1, 'legacy': 2 };
-    const statusWeight = { 'Approved': 0, 'approved': 0, 'Draft': 1, 'draft': 1, 'Deprecated': 3, 'deprecated': 3, 'unreviewed': 2, '': 2 };
+    const statusWeight = { 'approved': 0, 'draft': 1, 'unreviewed': 2, 'deprecated': 3 };
     docs.sort((a, b) => {
       const sw = (sourceWeight[a.source] ?? 2) - (sourceWeight[b.source] ?? 2);
       if (sw !== 0) return sw;
@@ -1056,10 +1056,10 @@ const ARCHIVE_HTML = `<!DOCTYPE html>
         <label>状态筛选</label>
         <select id="statusFilter" onchange="filterDocs()">
           <option value="">全部</option>
-          <option value="Approved">✅ Approved</option>
-          <option value="Draft">📝 Draft</option>
+          <option value="approved">✅ Approved</option>
+          <option value="draft">📝 Draft</option>
           <option value="unreviewed">🔍 Unreviewed</option>
-          <option value="Deprecated">🗑️ Deprecated</option>
+          <option value="deprecated">🗑️ Deprecated</option>
         </select>
         <label style="margin-top:8px">分类筛选</label>
         <select id="categoryFilter" onchange="filterDocs()">
@@ -1146,7 +1146,7 @@ const ARCHIVE_HTML = `<!DOCTYPE html>
         return;
       }
       
-      const statusColors = { 'Approved': '#00c853', 'Draft': '#ff9800', 'unreviewed': '#9e9e9e', 'Deprecated': '#f44336' };
+      const statusColors = { 'approved': '#00c853', 'draft': '#ff9800', 'unreviewed': '#9e9e9e', 'deprecated': '#f44336' };
       document.getElementById('docList').innerHTML = docs.map(d => {
         const isActive = selectedDoc === d.filename;
         const statusBadge = d.status ? '<span style="display:inline-block;padding:2px 6px;background:' + (statusColors[d.status] || '#333') + ';border-radius:3px;font-size:10px;margin-right:5px;color:#fff">' + d.status + '</span>' : '';
