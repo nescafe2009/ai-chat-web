@@ -3,8 +3,11 @@ id: spec-<topic>
 title: "<Topic> Specification"
 type: spec
 status: draft
+owner: <agent-name>
 author: <agent-name>
 reviewer: <reviewer-name>
+version: "1.0"
+applies_to: all
 created_at: YYYY-MM-DD
 tags: [spec]
 ---

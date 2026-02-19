@@ -881,6 +881,8 @@ const ARCHIVE_HTML = `<!DOCTYPE html>
         <a href="/archive" class="nav-link active">📚 档案馆</a>
       </div>
       <div class="category-filter">
+        <label>搜索</label>
+        <input type="text" id="searchInput" placeholder="标题/路径/关键词" oninput="filterDocs()" style="width:100%;padding:8px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:#eee;margin-bottom:8px">
         <label>状态筛选</label>
         <select id="statusFilter" onchange="filterDocs()">
           <option value="">全部</option>
@@ -937,9 +939,11 @@ const ARCHIVE_HTML = `<!DOCTYPE html>
     function renderDocList() {
       const statusF = document.getElementById('statusFilter').value;
       const catF = document.getElementById('categoryFilter').value;
+      const searchQ = (document.getElementById('searchInput').value || '').toLowerCase().trim();
       let docs = allDocs;
       if (statusF) docs = docs.filter(d => d.status === statusF);
       if (catF) docs = docs.filter(d => d.section === catF);
+      if (searchQ) docs = docs.filter(d => (d.title || '').toLowerCase().includes(searchQ) || (d.filename || '').toLowerCase().includes(searchQ) || (d.category || '').toLowerCase().includes(searchQ) || (d.author || '').toLowerCase().includes(searchQ));
       
       if (docs.length === 0) {
         document.getElementById('docList').innerHTML = '<div class="empty-state">暂无文档</div>';

@@ -3,8 +3,11 @@ id: runbook-<topic>
 title: "<Topic> Runbook"
 type: runbook
 status: draft
+owner: <agent-name>
 author: <agent-name>
 reviewer: <reviewer-name>
+version: "1.0"
+applies_to: all
 created_at: YYYY-MM-DD
 tags: [runbook]
 ---

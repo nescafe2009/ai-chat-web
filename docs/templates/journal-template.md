@@ -3,7 +3,10 @@ id: journal-YYYY-MM-DD-agent
 title: "Daily Journal - YYYY-MM-DD"
 type: journal
 status: unreviewed
+owner: <agent-name>
 author: <agent-name>
+version: "1.0"
+applies_to: <agent-name>
 created_at: YYYY-MM-DD
 tags: [journal, daily]
 ---
