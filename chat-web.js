@@ -18,6 +18,9 @@ const SESSION_TTL = 24 * 60 * 60;
 const MSG_LIMIT = 200; // 每个 stream 最多拉取条数
 const DOCS_DIR = process.env.DOCS_DIR || path.join(__dirname, 'docs');
 const JOURNALS_DIR = path.join(__dirname, 'journals');
+const ARCHIVE_DIR = process.env.ARCHIVE_DIR || path.join(__dirname, '..', 'stellaris-archive');
+const STELLARIS_DOCS_DIR = process.env.STELLARIS_DOCS_DIR || path.join(__dirname, '..', 'stellaris-docs');
+const DOCS_SINGLE_SOURCE = process.env.DOCS_SINGLE_SOURCE === 'true'; // feature flag: true = 旧单源模式
 
 // 验证码存储
 const loginCodes = new Map();
@@ -177,31 +180,28 @@ function parseFrontmatter(content) {
   return { meta, body: match[2] };
 }
 
-// 获取档案列表（递归扫描子目录）
-function getDocsList() {
+// 获取档案列表（支持多源扫描）
+function getDocsList(sourceFilter) {
   try {
-    if (!fs.existsSync(DOCS_DIR)) {
-      fs.mkdirSync(DOCS_DIR, { recursive: true });
-      return [];
-    }
-
     const docs = [];
-    function scanDir(dir, prefix) {
+    
+    function scanDir(dir, prefix, source) {
+      if (!fs.existsSync(dir)) return;
       const entries = fs.readdirSync(dir, { withFileTypes: true });
       for (const entry of entries) {
         if (entry.name.startsWith('.')) continue;
         const fullPath = path.join(dir, entry.name);
         if (entry.isDirectory()) {
-          scanDir(fullPath, prefix ? prefix + '/' + entry.name : entry.name);
+          scanDir(fullPath, prefix ? prefix + '/' + entry.name : entry.name, source);
         } else if (entry.name.endsWith('.md')) {
           const relPath = prefix ? prefix + '/' + entry.name : entry.name;
           const content = fs.readFileSync(fullPath, 'utf-8');
           const { meta } = parseFrontmatter(content);
           const section = prefix ? prefix.split('/')[0] : '';
-          const statusMap = { 'approved': 'Approved', 'drafts': 'Draft' };
+          const statusMap = { 'approved': 'Approved', 'drafts': 'Draft', 'deprecated': 'Deprecated' };
           const status = meta.status || statusMap[section] || '';
           docs.push({
-            filename: relPath,
+            filename: source + ':' + relPath,
             id: meta.id || entry.name.replace('.md', ''),
             title: meta.title || entry.name.replace('.md', ''),
             category: meta.category || meta.type || section || '未分类',
@@ -210,21 +210,40 @@ function getDocsList() {
             created_at: meta.created_at || '',
             author: meta.author || '',
             tags: Array.isArray(meta.tags) ? meta.tags : [],
-            visibility: meta.visibility || 'internal'
+            visibility: meta.visibility || 'internal',
+            source: source
           });
         }
       }
     }
-    scanDir(DOCS_DIR, '');
 
-    // 也扫描 journals/ 目录
-    if (fs.existsSync(JOURNALS_DIR)) {
-      scanDir(JOURNALS_DIR, 'journals');
+    if (DOCS_SINGLE_SOURCE) {
+      // 旧单源模式（feature flag 回退）
+      if (!sourceFilter || sourceFilter === 'legacy') {
+        if (fs.existsSync(DOCS_DIR)) scanDir(DOCS_DIR, '', 'legacy');
+        if (fs.existsSync(JOURNALS_DIR)) scanDir(JOURNALS_DIR, 'journals', 'legacy');
+      }
+    } else {
+      // 新双源模式
+      if (!sourceFilter || sourceFilter === 'archive') {
+        if (fs.existsSync(ARCHIVE_DIR)) scanDir(ARCHIVE_DIR, '', 'archive');
+      }
+      if (!sourceFilter || sourceFilter === 'docs') {
+        if (fs.existsSync(STELLARIS_DOCS_DIR)) scanDir(STELLARIS_DOCS_DIR, '', 'docs');
+      }
+      // legacy 仅在显式请求时扫描
+      if (sourceFilter === 'legacy') {
+        if (fs.existsSync(DOCS_DIR)) scanDir(DOCS_DIR, '', 'legacy');
+        if (fs.existsSync(JOURNALS_DIR)) scanDir(JOURNALS_DIR, 'journals', 'legacy');
+      }
     }
 
-    // 按 status 权重 + 日期倒序
-    const statusWeight = { 'Approved': 0, 'Draft': 1, '': 2 };
+    // 按 source 权重 + status 权重 + 日期倒序
+    const sourceWeight = { 'archive': 0, 'docs': 1, 'legacy': 2 };
+    const statusWeight = { 'Approved': 0, 'Draft': 1, 'Deprecated': 3, '': 2 };
     docs.sort((a, b) => {
+      const sw = (sourceWeight[a.source] || 2) - (sourceWeight[b.source] || 2);
+      if (sw !== 0) return sw;
       const w = (statusWeight[a.status] || 2) - (statusWeight[b.status] || 2);
       if (w !== 0) return w;
       return (b.created_at || '').localeCompare(a.created_at || '');
@@ -236,23 +255,46 @@ function getDocsList() {
   }
 }
 
-// 获取单个档案内容（支持子目录路径）
+// source:path 解析为实际文件路径
+function resolveDocPath(filename) {
+  // 安全检查
+  if (filename.includes('..')) return { error: 'path_traversal_rejected', code: 403 };
+  
+  // 新格式: source:path
+  const colonIdx = filename.indexOf(':');
+  if (colonIdx > 0) {
+    const source = filename.slice(0, colonIdx);
+    const relPath = path.normalize(filename.slice(colonIdx + 1));
+    if (relPath.includes('..')) return { error: 'path_traversal_rejected', code: 403 };
+    const dirMap = { 'archive': ARCHIVE_DIR, 'docs': STELLARIS_DOCS_DIR, 'legacy': DOCS_DIR };
+    const baseDir = dirMap[source];
+    if (!baseDir) return { error: 'unknown_source', code: 400 };
+    const filePath = path.join(baseDir, relPath);
+    if (!filePath.startsWith(baseDir)) return { error: 'path_outside_allowed_dirs', code: 403 };
+    return { filePath, source };
+  }
+  
+  // 兼容旧格式（无 source 前缀）
+  const normalized = path.normalize(filename);
+  if (normalized.startsWith('journals/') || normalized.startsWith('journals\\')) {
+    return { filePath: path.join(__dirname, normalized), source: 'legacy' };
+  }
+  // 先查新源，再查旧源
+  for (const [src, dir] of [['archive', ARCHIVE_DIR], ['docs', STELLARIS_DOCS_DIR], ['legacy', DOCS_DIR]]) {
+    const fp = path.join(dir, normalized);
+    if (fs.existsSync(fp) && fp.startsWith(dir)) return { filePath: fp, source: src };
+  }
+  return { filePath: path.join(DOCS_DIR, normalized), source: 'legacy' };
+}
+
+// 获取单个档案内容（支持多源）
 function getDocContent(filename) {
   try {
-    // 安全检查：显式拒绝路径遍历
-    if (filename.includes('..')) return { error: 'path_traversal_rejected', code: 403 };
-    const normalized = path.normalize(filename);
-    let filePath;
-    if (normalized.startsWith('journals/') || normalized.startsWith('journals\\')) {
-      filePath = path.join(__dirname, normalized);
-    } else {
-      filePath = path.join(DOCS_DIR, normalized);
-    }
-    const allowedDirs = [DOCS_DIR, JOURNALS_DIR];
-    if (!allowedDirs.some(d => filePath.startsWith(d))) return { error: 'path_outside_allowed_dirs', code: 403 };
-    if (!fs.existsSync(filePath)) return null;
+    const resolved = resolveDocPath(filename);
+    if (resolved.error) return resolved;
+    if (!fs.existsSync(resolved.filePath)) return null;
     
-    const content = fs.readFileSync(filePath, 'utf-8');
+    const content = fs.readFileSync(resolved.filePath, 'utf-8');
     const { meta, body } = parseFrontmatter(content);
     return { meta, body };
   } catch (e) {
@@ -474,7 +516,8 @@ const CHAT_HTML = `<!DOCTYPE html>
       </div>
       <div class="nav-links" style="padding: 10px; border-bottom: 1px solid #333;">
         <a href="/" style="display: block; padding: 8px 12px; color: #00d4ff; text-decoration: none; background: #1a1a3e; border-radius: 6px; margin-bottom: 5px;">💬 聊天记录</a>
-        <a href="/archive" style="display: block; padding: 8px 12px; color: #888; text-decoration: none; border-radius: 6px;">📚 档案馆</a>
+        <a href="/archive" style="display: block; padding: 8px 12px; color: #888; text-decoration: none; border-radius: 6px; margin-bottom: 5px;">📜 档案馆</a>
+        <a href="/docs" style="display: block; padding: 8px 12px; color: #888; text-decoration: none; border-radius: 6px;">📖 文档库</a>
       </div>
       <div style="padding: 10px 15px; border-bottom: 1px solid #333; font-size: 12px; color: #888;">📅 日期筛选</div>
       <div class="date-list" id="dateList"></div>
@@ -891,7 +934,8 @@ const ARCHIVE_HTML = `<!DOCTYPE html>
       </div>
       <div class="nav-links">
         <a href="/" class="nav-link">💬 聊天记录</a>
-        <a href="/archive" class="nav-link active">📚 档案馆</a>
+        <a href="/archive" class="nav-link active">📜 档案馆</a>
+        <a href="/docs" class="nav-link">📖 文档库</a>
       </div>
       <div class="category-filter">
         <label>搜索</label>
@@ -914,7 +958,8 @@ const ARCHIVE_HTML = `<!DOCTYPE html>
     </div>
     <div class="main">
       <div class="header">
-        <h1>📚 档案馆</h1>
+        <h1>📜 档案馆</h1>
+        <div style="font-size: 12px; color: #888; margin-top: 4px;">治理层文档 — 组织核心文件</div>
       </div>
       <div class="content" id="content">
         <div class="empty-state">← 选择左侧文档查看</div>
@@ -928,7 +973,7 @@ const ARCHIVE_HTML = `<!DOCTYPE html>
     
     async function loadDocs() {
       try {
-        const res = await fetch('/api/docs');
+        const res = await fetch('/api/docs?source=archive');
         const data = await res.json();
         if (data.error) {
           document.getElementById('docList').innerHTML = '<div class="empty-state">加载失败</div>';
@@ -1092,6 +1137,15 @@ const ARCHIVE_HTML = `<!DOCTYPE html>
   </script>
 </body>
 </html>`;
+
+// 文档库页面 HTML（基于档案馆模板，改 source=docs）
+const DOCS_HTML = ARCHIVE_HTML
+  .replace('<title>档案馆 - 枢纽</title>', '<title>文档库 - 枢纽</title>')
+  .replace('<a href="/archive" class="nav-link active">📜 档案馆</a>', '<a href="/archive" class="nav-link">📜 档案馆</a>')
+  .replace('<a href="/docs" class="nav-link">📖 文档库</a>', '<a href="/docs" class="nav-link active">📖 文档库</a>')
+  .replace('<h1>📜 档案馆</h1>', '<h1>📖 文档库</h1>')
+  .replace('治理层文档 — 组织核心文件', '工作层文档 — Runbooks / Specs / Templates')
+  .replace("fetch('/api/docs?source=archive')", "fetch('/api/docs?source=docs')");
 
 // 获取所有消息（带缓存 + 限制条数）
 async function getMessages() {
@@ -1308,9 +1362,8 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     
-    let docs = getDocsList();
+    let docs = getDocsList(url.searchParams.get('source') || null);
     // 服务端搜索
-    const url = new URL(req.url, 'http://localhost');
     const q = (url.searchParams.get('q') || '').toLowerCase().trim();
     if (q) {
       docs = docs.filter(d => (d.title || '').toLowerCase().includes(q) || (d.filename || '').toLowerCase().includes(q) || (d.category || '').toLowerCase().includes(q) || (d.author || '').toLowerCase().includes(q));
@@ -1359,11 +1412,19 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   
-  // 档案馆页面
+  // 档案馆页面（治理层）
   if (pathname === '/archive') {
     const user = await checkAuth(req);
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.end(user ? ARCHIVE_HTML : LOGIN_HTML);
+    return;
+  }
+
+  // 文档库页面（工作层）
+  if (pathname === '/docs') {
+    const user = await checkAuth(req);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.end(user ? DOCS_HTML : LOGIN_HTML);
     return;
   }
   
