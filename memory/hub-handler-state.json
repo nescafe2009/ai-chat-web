@@ -1,0 +1,10 @@
+{
+  "handled": {
+    "acceptance-hub-001": {
+      "at": 1771488156142,
+      "replyTo": "boss",
+      "replyStream": "boss:messages",
+      "msgId": "1771488156222-0"
+    }
+  }
+}

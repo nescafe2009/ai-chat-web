@@ -278,3 +278,37 @@ Known facts from Redis conversation:
 - Standardize process manager (launchctl vs pm2) per agent.
 - Ensure reply-to-origin is deterministic: daemon must `XADD` business reply into stream, not only wake.
 - File transfer between agents should use Tencent Cloud relay (boss directive), not in-stream fragments.
+
+## 8. Option B Deployment Evidence (2026-02-19)
+
+Commit: `4210e8e` (nescafe2009/ai-chat-web main)
+
+Changes:
+- `redis-daemon-serina.js`: pure wake mode (no LLM, no independent session)
+- `hub-main-handler.js`: idempotent write-back helper (adapted from Cortana's bundle)
+- `redis-chat.js`: added `streamOverride` parameter
+
+### Acceptance Tests (Cortana sanity-checked ✅)
+
+**A1. HUB-only happy path**
+- req_id=acceptance-hub-001
+- final=1771488156222-0
+- nonce=SERINA-20260219-001
+
+**A2. Idempotency replay**
+- req_id=acceptance-hub-001
+- final(first)=1771488156222-0
+- replay(second)=SKIPPED (no duplicate final)
+
+**A3. Failure visible**
+- req_id=acceptance-fail-001
+- error=1771488166187-0
+
+**B4. Semantic correctness**
+- XREVRANGE boss:messages verified: from=serina, to=boss, type=text/error, timestamp present
+- Conforms to inbox semantics (reply-to-origin writes to recipient stream)
+
+**C6. pm2 self-healing**
+- kill -9 PID 74348 → auto-restart PID 74541 after 5s
+- max_restarts=20, restart_delay=5000ms
+- pm2 save confirmed
