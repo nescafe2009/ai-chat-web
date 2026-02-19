@@ -232,9 +232,38 @@ async function handleOneMessage(client, msg) {
     return;
   }
 
-  // Option B: 构造 envelope，wake 主会话
+  // Option B: 构造 envelope + 上下文窗口，wake 主会话
   const envelope = buildEnvelope(msg);
-  const wakeText = `[HUB-MESSAGE] 枢纽收到新消息，请处理并写回 Redis。\n\n${envelope}\n\n请根据 ORIG_CONTENT 生成回复，然后执行:\nnode projects/redis-chat-web/hub-main-handler.js --wake-file <(echo "$ENVELOPE") --reply "<你的回复>"\n或直接用 redis-chat.js 写回。完成后输出 NO_REPLY。`;
+
+  // 拉取最近 N 条消息作为 ORIG_CONTEXT（窗口化）
+  let contextBlock = '';
+  try {
+    const CONTEXT_COUNT = 20;
+    const CONTEXT_MAX_CHARS = 6000;
+    const recent = await client.xRevRange(CONFIG.inChannel, '+', '-', { COUNT: CONTEXT_COUNT });
+    if (recent && recent.length > 1) {
+      // 跳过当前消息（第一条），取之前的消息
+      const contextMsgs = recent.slice(1).reverse();
+      let contextText = '';
+      let truncated = false;
+      for (const m of contextMsgs) {
+        const f = m.message || {};
+        const line = `[${f.from || '?'}] ${(f.content || '').substring(0, 500)}`;
+        if (contextText.length + line.length > CONTEXT_MAX_CHARS) {
+          truncated = true;
+          break;
+        }
+        contextText += line + '\n';
+      }
+      if (contextText) {
+        contextBlock = `\nORIG_CONTEXT=${truncated ? '[TRUNCATED] ' : ''}${contextText.trim()}`;
+      }
+    }
+  } catch (e) {
+    log('拉取上下文失败(非致命): ' + e.message);
+  }
+
+  const wakeText = `[HUB-MESSAGE] 枢纽收到新消息，请处理并写回 Redis。\n\n${envelope}${contextBlock}`;
 
   log(`Wake main: from=${from} req_id=${msg.id} content=${content.substring(0, 80)}`);
   await callWakeAPI(wakeText);
