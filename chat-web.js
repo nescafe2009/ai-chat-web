@@ -17,6 +17,7 @@ const REDIS_PASS = process.env.REDIS_PASS || 'SerinaCortana2026!';
 const SESSION_TTL = 24 * 60 * 60;
 const MSG_LIMIT = 200; // 每个 stream 最多拉取条数
 const DOCS_DIR = process.env.DOCS_DIR || path.join(__dirname, 'docs');
+const JOURNALS_DIR = path.join(__dirname, 'journals');
 
 // 验证码存储
 const loginCodes = new Map();
@@ -216,6 +217,11 @@ function getDocsList() {
     }
     scanDir(DOCS_DIR, '');
 
+    // 也扫描 journals/ 目录
+    if (fs.existsSync(JOURNALS_DIR)) {
+      scanDir(JOURNALS_DIR, 'journals');
+    }
+
     // 按 status 权重 + 日期倒序
     const statusWeight = { 'Approved': 0, 'Draft': 1, '': 2 };
     docs.sort((a, b) => {
@@ -235,8 +241,14 @@ function getDocContent(filename) {
   try {
     // 安全检查：防止路径遍历
     const normalized = path.normalize(filename).replace(/\.\./g, '');
-    const filePath = path.join(DOCS_DIR, normalized);
-    if (!filePath.startsWith(DOCS_DIR)) return null;
+    let filePath;
+    if (normalized.startsWith('journals/') || normalized.startsWith('journals\\')) {
+      filePath = path.join(__dirname, normalized);
+    } else {
+      filePath = path.join(DOCS_DIR, normalized);
+    }
+    const allowedDirs = [DOCS_DIR, JOURNALS_DIR];
+    if (!allowedDirs.some(d => filePath.startsWith(d))) return null;
     if (!fs.existsSync(filePath)) return null;
     
     const content = fs.readFileSync(filePath, 'utf-8');
