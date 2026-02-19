@@ -240,11 +240,11 @@ function getDocsList(sourceFilter) {
 
     // 按 source 权重 + status 权重 + 日期倒序
     const sourceWeight = { 'archive': 0, 'docs': 1, 'legacy': 2 };
-    const statusWeight = { 'Approved': 0, 'Draft': 1, 'Deprecated': 3, '': 2 };
+    const statusWeight = { 'Approved': 0, 'approved': 0, 'Draft': 1, 'draft': 1, 'Deprecated': 3, 'deprecated': 3, 'unreviewed': 2, '': 2 };
     docs.sort((a, b) => {
-      const sw = (sourceWeight[a.source] || 2) - (sourceWeight[b.source] || 2);
+      const sw = (sourceWeight[a.source] ?? 2) - (sourceWeight[b.source] ?? 2);
       if (sw !== 0) return sw;
-      const w = (statusWeight[a.status] || 2) - (statusWeight[b.status] || 2);
+      const w = (statusWeight[a.status] ?? 2) - (statusWeight[b.status] ?? 2);
       if (w !== 0) return w;
       return (b.created_at || '').localeCompare(a.created_at || '');
     });
