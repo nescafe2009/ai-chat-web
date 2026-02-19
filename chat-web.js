@@ -235,9 +235,12 @@ function getDocsList(sourceFilter) {
           const section = prefix ? prefix.split('/')[0] : '';
           const statusMap = { 'approved': 'Approved', 'drafts': 'Draft', 'deprecated': 'Deprecated' };
           const status = meta.status || statusMap[section] || '';
+          const docId = meta.id || entry.name.replace('.md', '');
+          // 从 registry 反查 code
+          const regCode = Object.entries(docRegistry).find(([c, e]) => e.doc_id === docId && e.source === source);
           docs.push({
             filename: source + ':' + relPath,
-            id: meta.id || entry.name.replace('.md', ''),
+            id: docId,
             title: meta.title || entry.name.replace('.md', ''),
             category: meta.category || meta.type || section || '未分类',
             section: section,
@@ -246,7 +249,8 @@ function getDocsList(sourceFilter) {
             author: meta.author || '',
             tags: Array.isArray(meta.tags) ? meta.tags : [],
             visibility: meta.visibility || 'internal',
-            source: source
+            source: source,
+            code: regCode ? regCode[0] : null
           });
         }
       }
@@ -972,6 +976,11 @@ const ARCHIVE_HTML = `<!DOCTYPE html>
         <a href="/archive" class="nav-link active">📜 档案馆</a>
         <a href="/docs" class="nav-link">📖 文档库</a>
       </div>
+      <div style="padding:8px 15px;border-bottom:1px solid #333;display:flex;align-items:center;gap:8px">
+        <span style="color:#888;font-size:12px">语言:</span>
+        <button id="langZh" onclick="setLang('zh')" style="padding:4px 10px;border-radius:4px;border:1px solid #333;cursor:pointer;font-size:12px">中文</button>
+        <button id="langEn" onclick="setLang('en')" style="padding:4px 10px;border-radius:4px;border:1px solid #333;cursor:pointer;font-size:12px">EN</button>
+      </div>
       <div class="category-filter">
         <label>搜索</label>
         <input type="text" id="searchInput" placeholder="标题/路径/关键词" oninput="filterDocs()" style="width:100%;padding:8px;background:#1a1a2e;border:1px solid #333;border-radius:4px;color:#eee;margin-bottom:8px">
@@ -1005,6 +1014,23 @@ const ARCHIVE_HTML = `<!DOCTYPE html>
   <script>
     let allDocs = [];
     let selectedDoc = null;
+    let currentLang = localStorage.getItem('ui.lang') || 'zh';
+    
+    function setLang(lang) {
+      currentLang = lang;
+      localStorage.setItem('ui.lang', lang);
+      updateLangButtons();
+      if (selectedDoc) selectDoc(selectedDoc);
+    }
+    function updateLangButtons() {
+      const zh = document.getElementById('langZh');
+      const en = document.getElementById('langEn');
+      zh.style.background = currentLang === 'zh' ? '#00d4ff' : '#1a1a2e';
+      zh.style.color = currentLang === 'zh' ? '#000' : '#888';
+      en.style.background = currentLang === 'en' ? '#00d4ff' : '#1a1a2e';
+      en.style.color = currentLang === 'en' ? '#000' : '#888';
+    }
+    updateLangButtons();
     
     async function loadDocs() {
       try {
@@ -1066,7 +1092,15 @@ const ARCHIVE_HTML = `<!DOCTYPE html>
       document.getElementById('content').innerHTML = '<div class="loading">加载中...</div>';
       
       try {
-        const res = await fetch('/api/docs/' + encodeURIComponent(filename));
+        // 查找文档是否有 code，有则用 code API（支持语言切换）
+        const docInfo = allDocs.find(d => d.filename === filename);
+        let fetchUrl;
+        if (docInfo && docInfo.code) {
+          fetchUrl = '/api/doc/' + encodeURIComponent(docInfo.code) + '?lang=' + currentLang;
+        } else {
+          fetchUrl = '/api/docs/' + encodeURIComponent(filename);
+        }
+        const res = await fetch(fetchUrl);
         const data = await res.json();
         
         if (data.error) {
@@ -1078,6 +1112,12 @@ const ARCHIVE_HTML = `<!DOCTYPE html>
         const tags = Array.isArray(meta.tags) ? meta.tags : [];
         
         let html = '<div class="doc-header">';
+        if (data.missingTranslation) {
+          html += '<div style="background:#553300;padding:8px 12px;border-radius:6px;margin-bottom:10px;color:#ffaa00;font-size:13px">⚠️ Missing translation for "' + currentLang + '". Showing "' + (data.lang || 'zh') + '" version.</div>';
+        }
+        if (data.code) {
+          html += '<div style="color:#888;font-size:12px;margin-bottom:6px">' + escapeHtml(data.code) + ' | ' + escapeHtml(data.doc_id || '') + '</div>';
+        }
         html += '<h1>' + escapeHtml(meta.title || filename) + '</h1>';
         html += '<div class="meta">';
         if (meta.status) {
