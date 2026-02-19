@@ -221,12 +221,19 @@ function parseFrontmatter(content) {
 
 // category 别名映射：中文 → 英文 canonical key
 const CATEGORY_ALIAS = {
+  // 中文别名
   '章程': 'charter', '宪法': 'constitution', '法律': 'laws',
   '愿景': 'vision', '会议纪要': 'minutes', '策略': 'strategy',
   '操作章程': 'ops-charter', '运行手册': 'runbooks', '规格说明': 'specs',
   '模板': 'templates', '项目': 'projects', '日志': 'journals',
   '每日': 'daily', '发布': 'releases', '证据': 'evidence',
   '未分类': 'uncategorized',
+  // 英文别名（非 canonical 形式）
+  'meeting minutes': 'minutes', 'meeting-minutes': 'minutes',
+  'ops charter': 'ops-charter', 'operations charter': 'ops-charter',
+  'run book': 'runbooks', 'run books': 'runbooks',
+  'template': 'templates', 'project': 'projects', 'journal': 'journals',
+  'release': 'releases', 'spec': 'specs', 'specification': 'specs',
 };
 function normalizeCategory(raw) {
   if (!raw) return 'uncategorized';
@@ -235,8 +242,9 @@ function normalizeCategory(raw) {
   const canonicals = new Set(['vision','constitution','laws','charter','ops-charter','minutes','strategy',
     'runbooks','runbook','specs','daily','journals','releases','evidence','templates','projects','uncategorized']);
   if (canonicals.has(key)) return key;
-  // 中文别名映射
+  // 别名映射（先精确匹配，再 lowercase 匹配）
   if (CATEGORY_ALIAS[raw.trim()]) return CATEGORY_ALIAS[raw.trim()];
+  if (CATEGORY_ALIAS[key]) return CATEGORY_ALIAS[key];
   return raw.trim();
 }
 
