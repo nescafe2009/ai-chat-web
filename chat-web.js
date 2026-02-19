@@ -238,7 +238,7 @@ function getDocsList(sourceFilter, preferLang) {
           const { meta } = parseFrontmatter(content);
           const section = prefix ? prefix.split('/')[0] : '';
           const statusMap = { 'approved': 'Approved', 'drafts': 'Draft', 'deprecated': 'Deprecated' };
-          const status = meta.status || statusMap[section] || '';
+          const status = meta.status || statusMap[section] || 'unreviewed';
           // doc_id 优先级：frontmatter doc_id > frontmatter id > 文件名（去掉 .zh/.en.md）
           const docId = meta.doc_id || meta.id || entry.name.replace(/\.(zh|en)\.md$/, '').replace('.md', '');
           // 从 registry 反查 code
@@ -249,7 +249,7 @@ function getDocsList(sourceFilter, preferLang) {
             filename: source + ':' + relPath,
             id: docId,
             title: meta.title || entry.name.replace(/\.(zh|en)\.md$/, '').replace('.md', ''),
-            category: meta.category || meta.type || section || '未分类',
+            category: meta.category || 'uncategorized',
             section: section,
             status: status,
             created_at: meta.created_at || '',
@@ -1019,8 +1019,10 @@ const ARCHIVE_HTML = `<!DOCTYPE html>
           <option value="">全部</option>
           <option value="Approved">✅ Approved</option>
           <option value="Draft">📝 Draft</option>
+          <option value="unreviewed">🔍 Unreviewed</option>
+          <option value="Deprecated">🗑️ Deprecated</option>
         </select>
-        <label style="margin-top:8px">目录筛选</label>
+        <label style="margin-top:8px">分类筛选</label>
         <select id="categoryFilter" onchange="filterDocs()">
           <option value="">全部</option>
         </select>
@@ -1073,10 +1075,12 @@ const ARCHIVE_HTML = `<!DOCTYPE html>
           return;
         }
         allDocs = data.docs;
-        // 动态填充目录筛选器
-        const sections = [...new Set(allDocs.map(d => d.section).filter(Boolean))];
+        // 动态填充分类筛选器（基于枚举，去重）
+        const categories = [...new Set(allDocs.map(d => d.category).filter(Boolean))].sort();
         const catSel = document.getElementById('categoryFilter');
-        sections.forEach(s => { const o = document.createElement('option'); o.value = s; o.textContent = s; catSel.appendChild(o); });
+        // 清除旧选项（保留"全部"）
+        while (catSel.options.length > 1) catSel.remove(1);
+        categories.forEach(s => { const o = document.createElement('option'); o.value = s; o.textContent = s; catSel.appendChild(o); });
         renderDocList();
       } catch (e) {
         document.getElementById('docList').innerHTML = '<div class="empty-state">网络错误</div>';
@@ -1093,7 +1097,7 @@ const ARCHIVE_HTML = `<!DOCTYPE html>
       const searchQ = (document.getElementById('searchInput').value || '').toLowerCase().trim();
       let docs = allDocs;
       if (statusF) docs = docs.filter(d => d.status === statusF);
-      if (catF) docs = docs.filter(d => d.section === catF);
+      if (catF) docs = docs.filter(d => d.category === catF);
       if (searchQ) docs = docs.filter(d => (d.title || '').toLowerCase().includes(searchQ) || (d.filename || '').toLowerCase().includes(searchQ) || (d.category || '').toLowerCase().includes(searchQ) || (d.author || '').toLowerCase().includes(searchQ));
       
       if (docs.length === 0) {
@@ -1101,7 +1105,7 @@ const ARCHIVE_HTML = `<!DOCTYPE html>
         return;
       }
       
-      const statusColors = { 'Approved': '#00c853', 'Draft': '#ff9800' };
+      const statusColors = { 'Approved': '#00c853', 'Draft': '#ff9800', 'unreviewed': '#9e9e9e', 'Deprecated': '#f44336' };
       document.getElementById('docList').innerHTML = docs.map(d => {
         const isActive = selectedDoc === d.filename;
         const statusBadge = d.status ? '<span style="display:inline-block;padding:2px 6px;background:' + (statusColors[d.status] || '#333') + ';border-radius:3px;font-size:10px;margin-right:5px;color:#fff">' + d.status + '</span>' : '';
@@ -1110,7 +1114,6 @@ const ARCHIVE_HTML = `<!DOCTYPE html>
           '<div class="doc-meta">' +
             statusBadge +
             '<span class="doc-category">' + escapeHtml(d.category) + '</span>' +
-            (d.section ? ' <span class="doc-category">' + escapeHtml(d.section) + '</span>' : '') +
             ' ' + d.created_at +
           '</div>' +
         '</div>';
