@@ -248,7 +248,7 @@ async function handleOneMessage(client, msg) {
       let truncated = false;
       for (const m of contextMsgs) {
         const f = m.message || {};
-        const line = `[${f.from || '?'}] ${(f.content || '').substring(0, 500)}`;
+        const line = `[${f.from || '?'}] ${(f.content || '').substring(0, 300)}`;
         if (contextText.length + line.length > CONTEXT_MAX_CHARS) {
           truncated = true;
           break;
