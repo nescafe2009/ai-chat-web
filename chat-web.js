@@ -235,13 +235,16 @@ function getDocsList(sourceFilter) {
           const section = prefix ? prefix.split('/')[0] : '';
           const statusMap = { 'approved': 'Approved', 'drafts': 'Draft', 'deprecated': 'Deprecated' };
           const status = meta.status || statusMap[section] || '';
-          const docId = meta.id || entry.name.replace('.md', '');
+          // doc_id 优先级：frontmatter doc_id > frontmatter id > 文件名（去掉 .zh/.en.md）
+          const docId = meta.doc_id || meta.id || entry.name.replace(/\.(zh|en)\.md$/, '').replace('.md', '');
           // 从 registry 反查 code
           const regCode = Object.entries(docRegistry).find(([c, e]) => e.doc_id === docId && e.source === source);
+          // 检测语言：从 frontmatter 或文件名
+          const fileLang = meta.lang || (entry.name.match(/\.(zh|en)\.md$/) ? entry.name.match(/\.(zh|en)\.md$/)[1] : 'zh');
           docs.push({
             filename: source + ':' + relPath,
             id: docId,
-            title: meta.title || entry.name.replace('.md', ''),
+            title: meta.title || entry.name.replace(/\.(zh|en)\.md$/, '').replace('.md', ''),
             category: meta.category || meta.type || section || '未分类',
             section: section,
             status: status,
@@ -250,7 +253,8 @@ function getDocsList(sourceFilter) {
             tags: Array.isArray(meta.tags) ? meta.tags : [],
             visibility: meta.visibility || 'internal',
             source: source,
-            code: regCode ? regCode[0] : null
+            code: regCode ? regCode[0] : null,
+            lang: fileLang
           });
         }
       }
@@ -287,7 +291,28 @@ function getDocsList(sourceFilter) {
       if (w !== 0) return w;
       return (b.created_at || '').localeCompare(a.created_at || '');
     });
-    return docs;
+
+    // 去重：同一个 doc_id+source 只保留一条（优先 zh，避免列表重复）
+    const seen = new Set();
+    const deduped = [];
+    // 先把 zh 排前面
+    docs.sort((a, b) => (a.lang === 'zh' ? -1 : 1) - (b.lang === 'zh' ? -1 : 1));
+    for (const doc of docs) {
+      const key = doc.id + '|' + doc.source;
+      if (!seen.has(key)) {
+        seen.add(key);
+        deduped.push(doc);
+      }
+    }
+    // 重新按原排序
+    deduped.sort((a, b) => {
+      const sw = (sourceWeight[a.source] ?? 2) - (sourceWeight[b.source] ?? 2);
+      if (sw !== 0) return sw;
+      const w = (statusWeight[a.status] ?? 2) - (statusWeight[b.status] ?? 2);
+      if (w !== 0) return w;
+      return (b.created_at || '').localeCompare(a.created_at || '');
+    });
+    return deduped;
   } catch (e) {
     console.error('[getDocsList] 失败:', e.message);
     return [];
