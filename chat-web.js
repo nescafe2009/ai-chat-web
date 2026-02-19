@@ -1290,25 +1290,43 @@ const server = http.createServer(async (req, res) => {
     return;
   }
   
-  // API: 获取档案列表（需要登录）
+  // 只读 API token 验证（用于无登录态的档案馆访问）
+  const DOCS_READ_TOKEN = process.env.DOCS_READ_TOKEN || 'stellaris-docs-readonly-2026';
+  function checkDocsAuth(req) {
+    const url = new URL(req.url, 'http://localhost');
+    const token = url.searchParams.get('token') || (req.headers.authorization || '').replace('Bearer ', '');
+    if (token === DOCS_READ_TOKEN) return true;
+    return checkAuth(req);
+  }
+
+  // API: 获取档案列表（登录或只读 token）
   if (pathname === '/api/docs') {
-    const user = await checkAuth(req);
-    if (!user) {
+    const authed = await checkDocsAuth(req);
+    if (!authed) {
       res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify({ error: 'unauthorized' }));
       return;
     }
     
-    const docs = getDocsList();
+    let docs = getDocsList();
+    // 服务端搜索
+    const url = new URL(req.url, 'http://localhost');
+    const q = (url.searchParams.get('q') || '').toLowerCase().trim();
+    if (q) {
+      docs = docs.filter(d => (d.title || '').toLowerCase().includes(q) || (d.filename || '').toLowerCase().includes(q) || (d.category || '').toLowerCase().includes(q) || (d.author || '').toLowerCase().includes(q));
+    }
+    const status = url.searchParams.get('status');
+    if (status) docs = docs.filter(d => d.status && d.status.toLowerCase() === status.toLowerCase());
+    
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ docs }));
     return;
   }
   
-  // API: 获取单个档案内容（需要登录）
+  // API: 获取单个档案内容（登录或只读 token）
   if (pathname.startsWith('/api/docs/') && req.method === 'GET') {
-    const user = await checkAuth(req);
-    if (!user) {
+    const authed = await checkDocsAuth(req);
+    if (!authed) {
       res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify({ error: 'unauthorized' }));
       return;
