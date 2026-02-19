@@ -219,6 +219,37 @@ function parseFrontmatter(content) {
   return { meta, body: match[2] };
 }
 
+// category 别名映射：中文 → 英文 canonical key
+const CATEGORY_ALIAS = {
+  '章程': 'charter', '宪法': 'constitution', '法律': 'laws',
+  '愿景': 'vision', '会议纪要': 'minutes', '策略': 'strategy',
+  '操作章程': 'ops-charter', '运行手册': 'runbooks', '规格说明': 'specs',
+  '模板': 'templates', '项目': 'projects', '日志': 'journals',
+  '每日': 'daily', '发布': 'releases', '证据': 'evidence',
+  '未分类': 'uncategorized',
+};
+function normalizeCategory(raw) {
+  if (!raw) return 'uncategorized';
+  const key = raw.trim().toLowerCase();
+  // 已经是英文 canonical key 则直接返回
+  const canonicals = new Set(['vision','constitution','laws','charter','ops-charter','minutes','strategy',
+    'runbooks','runbook','specs','daily','journals','releases','evidence','templates','projects','uncategorized']);
+  if (canonicals.has(key)) return key;
+  // 中文别名映射
+  if (CATEGORY_ALIAS[raw.trim()]) return CATEGORY_ALIAS[raw.trim()];
+  return raw.trim();
+}
+
+// category canonical key → 中文展示名
+const CATEGORY_DISPLAY = {
+  'vision': '愿景', 'constitution': '宪法', 'laws': '法律',
+  'charter': '章程', 'ops-charter': '操作章程', 'minutes': '会议纪要',
+  'strategy': '策略', 'runbooks': '运行手册', 'runbook': '运行手册',
+  'specs': '规格说明', 'daily': '每日', 'journals': '日志',
+  'releases': '发布', 'evidence': '证据', 'templates': '模板',
+  'projects': '项目', 'uncategorized': '未分类',
+};
+
 // 获取档案列表（支持多源扫描）
 function getDocsList(sourceFilter, preferLang) {
   try {
@@ -249,7 +280,7 @@ function getDocsList(sourceFilter, preferLang) {
             filename: source + ':' + relPath,
             id: docId,
             title: meta.title || entry.name.replace(/\.(zh|en)\.md$/, '').replace('.md', ''),
-            category: meta.category || 'uncategorized',
+            category: normalizeCategory(meta.category),
             section: section,
             status: status,
             created_at: meta.created_at || '',
@@ -1075,12 +1106,14 @@ const ARCHIVE_HTML = `<!DOCTYPE html>
           return;
         }
         allDocs = data.docs;
+        window._catDisplay = data.categoryDisplay || {};
         // 动态填充分类筛选器（基于枚举，去重）
         const categories = [...new Set(allDocs.map(d => d.category).filter(Boolean))].sort();
         const catSel = document.getElementById('categoryFilter');
         // 清除旧选项（保留"全部"）
         while (catSel.options.length > 1) catSel.remove(1);
-        categories.forEach(s => { const o = document.createElement('option'); o.value = s; o.textContent = s; catSel.appendChild(o); });
+        const lang = currentLang;
+        categories.forEach(s => { const o = document.createElement('option'); o.value = s; o.textContent = (lang === 'zh' && window._catDisplay[s]) ? window._catDisplay[s] : s; catSel.appendChild(o); });
         renderDocList();
       } catch (e) {
         document.getElementById('docList').innerHTML = '<div class="empty-state">网络错误</div>';
@@ -1113,7 +1146,7 @@ const ARCHIVE_HTML = `<!DOCTYPE html>
           '<div class="doc-title">' + escapeHtml(d.title) + '</div>' +
           '<div class="doc-meta">' +
             statusBadge +
-            '<span class="doc-category">' + escapeHtml(d.category) + '</span>' +
+            '<span class="doc-category">' + escapeHtml((currentLang === 'zh' && window._catDisplay[d.category]) ? window._catDisplay[d.category] : d.category) + '</span>' +
             ' ' + d.created_at +
           '</div>' +
         '</div>';
@@ -1482,7 +1515,7 @@ const server = http.createServer(async (req, res) => {
     if (status) docs = docs.filter(d => d.status && d.status.toLowerCase() === status.toLowerCase());
     
     res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify({ docs }));
+    res.end(JSON.stringify({ docs, categoryDisplay: CATEGORY_DISPLAY }));
     return;
   }
   
