@@ -77,38 +77,35 @@ else
   echo ""
   echo "请将以下内容合并到 openclaw.json："
   echo ""
-  cat "$SCRIPT_DIR/config-template.json"
-  echo ""
-
-  if [ -n "$AGENT_NAME" ] && [ -n "$HUB2D_URL" ]; then
-    echo "检测到参数，尝试自动写入配置..."
-    python3 -c "
-import json
-with open('$CONFIG_FILE') as f:
-    d = json.load(f)
-if 'channels' not in d: d['channels'] = {}
-d['channels']['nexus'] = {
-    'enabled': True,
-    'hub2dUrl': '$HUB2D_URL',
-    'roomId': 'general',
-    'agentName': '$AGENT_NAME',
-    'longTextThreshold': 4000
-}
-if 'plugins' not in d: d['plugins'] = {}
-if 'entries' not in d['plugins']: d['plugins']['entries'] = {}
-d['plugins']['entries']['nexus'] = {'enabled': True}
-gw = d.get('gateway', {})
-http = gw.get('http', {})
-ep = http.get('endpoints', {})
-ep['chatCompletions'] = {'enabled': True}
-http['endpoints'] = ep
-gw['http'] = http
-d['gateway'] = gw
-with open('$CONFIG_FILE', 'w') as f:
-    json.dump(d, f, indent=2, ensure_ascii=False)
-print('✅ 配置已自动写入')
-" 2>/dev/null || echo "❌ 自动写入失败，请手动配置"
+  echo '--- 最小必改配置 snippet ---'
+  echo ''
+  if [ -n "$AGENT_NAME" ]; then
+    DISPLAY_AGENT="$AGENT_NAME"
+  else
+    DISPLAY_AGENT="YOUR_AGENT_NAME"
   fi
+  if [ -n "$HUB2D_URL" ]; then
+    DISPLAY_URL="$HUB2D_URL"
+  else
+    DISPLAY_URL="http://YOUR_HUB2D_HOST:9800"
+  fi
+  cat <<SNIPPET
+  "channels": {
+    "nexus": {
+      "enabled": true,
+      "hub2dUrl": "${DISPLAY_URL}",
+      "roomId": "general",
+      "agentName": "${DISPLAY_AGENT}",
+      "longTextThreshold": 4000
+    }
+  },
+  "plugins": { "entries": { "nexus": { "enabled": true } } },
+  "gateway": { "http": { "endpoints": { "chatCompletions": { "enabled": true } } } }
+SNIPPET
+  echo ''
+  echo '--- P0: plugins.entries.nexus.enabled + chatCompletions.enabled 必须开启 ---'
+  echo ''
+  echo "完整模板参考: ${SCRIPT_DIR}/config-template.json"
 fi
 
 # 5. 重启 gateway
