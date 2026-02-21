@@ -45,10 +45,11 @@ mkdir -p "$PLUGIN_DIR"
 echo "✅ 插件目录: $PLUGIN_DIR"
 
 # 3. 复制 plugin 文件
-cp "$SCRIPT_DIR/index.ts" "$PLUGIN_DIR/"
+cp "$SCRIPT_DIR/index.js" "$PLUGIN_DIR/"
 cp "$SCRIPT_DIR/package.json" "$PLUGIN_DIR/"
 cp "$SCRIPT_DIR/openclaw.plugin.json" "$PLUGIN_DIR/"
-echo "✅ 插件文件已复制"
+cp "$SCRIPT_DIR/README.md" "$PLUGIN_DIR/" 2>/dev/null || true
+echo "✅ 插件文件已复制（index.js + openclaw.plugin.json + package.json）"
 
 # 4. 检查/更新 openclaw.json 配置
 if [ ! -f "$CONFIG_FILE" ]; then

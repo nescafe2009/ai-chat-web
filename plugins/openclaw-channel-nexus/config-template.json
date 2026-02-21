@@ -16,6 +16,7 @@
     }
   },
   "gateway": {
+    "port": 18789,
     "http": {
       "endpoints": {
         "chatCompletions": { "enabled": true }
