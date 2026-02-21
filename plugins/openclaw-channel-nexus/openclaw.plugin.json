@@ -1,5 +1,5 @@
 {
-  "id": "nexus",
+  "id": "openclaw-channel-nexus",
   "channels": [
     "nexus"
   ],
@@ -22,6 +22,11 @@
       "longTextThreshold": {
         "type": "integer",
         "minimum": 500
+      },
+      "gatewayTimeoutMs": {
+        "type": "integer",
+        "minimum": 5000,
+        "description": "Gateway HTTP dispatch timeout in ms (default 60000)"
       }
     }
   },
@@ -41,7 +46,11 @@
     "longTextThreshold": {
       "label": "Long Text Threshold (chars)",
       "placeholder": "4000"
+    },
+    "gatewayTimeoutMs": {
+      "label": "Gateway Timeout (ms)",
+      "placeholder": "60000"
     }
   },
-  "version": "0.2.0"
+  "version": "0.3.0"
 }

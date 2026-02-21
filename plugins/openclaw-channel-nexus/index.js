@@ -12,9 +12,10 @@ const DEFAULT_ROOM_ID = "general";
 const DEFAULT_AGENT_NAME = "serina";
 const DEFAULT_LONG_TEXT = 4000;
 const DEFAULT_GATEWAY_TIMEOUT_MS = 60000;
+const PLUGIN_VERSION = "0.3.0";
 
 const meta = {
-  id: "nexus",
+  id: "openclaw-channel-nexus",
   label: "Nexus",
   selectionLabel: "Nexus Hub 2.0",
   detailLabel: "Nexus Hub",
@@ -22,9 +23,9 @@ const meta = {
   blurb: "Multi-agent communication hub with SSE + SQLite persistence.",
 };
 
-let sseAbort | null = null;
-let lastEventId | null = null;
-let reconnectTimer | null = null;
+let sseAbort = null;
+let lastEventId = null;
+let reconnectTimer = null;
 let reconnectDelay = 1000;
 const MAX_RECONNECT_DELAY = 30000;
 
@@ -34,15 +35,13 @@ let gatewayToken = "";
 let gatewayTimeoutMs = DEFAULT_GATEWAY_TIMEOUT_MS;
 let runtimeApi = null;
 
-function log(msg ) {
+function log(msg) {
   console.log(`[nexus] ${msg}`);
 }
 
 // ===== Gateway HTTP dispatch =====
 
-const GATEWAY_TIMEOUT_MS = 60000; // legacy constant, actual value from gatewayTimeoutMs
-
-async function callGateway(userContent , sessionKey ) {
+async function callGateway(userContent, sessionKey) {
   const url = `http://127.0.0.1:${gatewayPort}/v1/chat/completions`;
   const headers = { "Content-Type": "application/json" };
   if (gatewayToken) headers.Authorization = `Bearer ${gatewayToken}`;
@@ -70,22 +69,21 @@ async function callGateway(userContent , sessionKey ) {
       throw Object.assign(new Error(`Gateway ${resp.status}: ${errText.slice(0, 200)}`), { code });
     }
 
-    let data ;
+    let data;
     try {
       data = await resp.json();
-    } catch (jsonErr ) {
+    } catch (jsonErr) {
       throw Object.assign(new Error("Gateway response JSON parse failed"), { code: "invalid_json" });
     }
 
     return data.choices?.[0]?.message?.content || "(no reply)";
-  } catch (e ) {
+  } catch (e) {
     if (e.name === "AbortError") {
       throw Object.assign(
         new Error(`[ERROR] gateway_timeout_${Math.round(timeoutMs / 1000)}s`),
         { code: `gateway_timeout_${Math.round(timeoutMs / 1000)}s` }
       );
     }
-    // 保留已分类的 code，未分类的归为 fetch_error
     if (!e.code) e.code = "fetch_error";
     throw e;
   } finally {
@@ -95,7 +93,7 @@ async function callGateway(userContent , sessionKey ) {
 
 // ===== Hub2d helpers =====
 
-async function postReply(hub2dUrl , body ) {
+async function postReply(hub2dUrl, body) {
   const resp = await fetch(`${hub2dUrl}/v1/replies`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -110,7 +108,7 @@ async function postReply(hub2dUrl , body ) {
 
 // ===== SSE connection =====
 
-function connectSSE(config , ctx ) {
+function connectSSE(config, ctx) {
   const hub2dUrl = config.hub2dUrl || DEFAULT_HUB2D_URL;
   const agentName = config.agentName || DEFAULT_AGENT_NAME;
 
@@ -150,7 +148,7 @@ function connectSSE(config , ctx ) {
         const lines = buffer.split("\n");
         buffer = lines.pop() || "";
 
-        let currentId | null = null;
+        let currentId = null;
         let currentData = "";
 
         for (const line of lines) {
@@ -162,7 +160,7 @@ function connectSSE(config , ctx ) {
             if (currentId) lastEventId = currentId;
             try {
               await handleEvent(JSON.parse(currentData), config, ctx);
-            } catch (e ) {
+            } catch (e) {
               log(`Event handle error: ${e.message}`);
             }
             currentData = "";
@@ -174,14 +172,14 @@ function connectSSE(config , ctx ) {
       log("SSE stream ended, reconnecting...");
       scheduleReconnect(config, ctx);
     })
-    .catch((e ) => {
+    .catch((e) => {
       if (e.name === "AbortError") return;
       log(`SSE error: ${e.message}, reconnecting in ${reconnectDelay}ms`);
       scheduleReconnect(config, ctx);
     });
 }
 
-function scheduleReconnect(config , ctx ) {
+function scheduleReconnect(config, ctx) {
   if (reconnectTimer) clearTimeout(reconnectTimer);
   const snapshot = ctx.getStatus?.() || {};
   ctx.setStatus?.({ ...snapshot, connected: false });
@@ -191,7 +189,7 @@ function scheduleReconnect(config , ctx ) {
 
 // ===== Inbound event handler =====
 
-async function handleEvent(event , config , ctx ) {
+async function handleEvent(event, config, ctx) {
   const agentName = config.agentName || DEFAULT_AGENT_NAME;
   const hub2dUrl = config.hub2dUrl || DEFAULT_HUB2D_URL;
   const threshold = config.longTextThreshold || DEFAULT_LONG_TEXT;
@@ -235,7 +233,7 @@ async function handleEvent(event , config , ctx ) {
     });
 
     log(`Reply sent: event_id=${event.event_id} latency=${latencyMs}ms len=${replyText.length}`);
-  } catch (e ) {
+  } catch (e) {
     const latencyMs = Date.now() - startMs;
     const errCode = e.code || "unknown_error";
     log(`Error processing event ${event.event_id}: [${errCode}] ${e.message}`);
@@ -247,9 +245,10 @@ async function handleEvent(event , config , ctx ) {
         text: `[ERROR] ${errCode}: ${e.message?.slice(0, 200) || "unknown"}`,
         status: "error",
         latency_ms: latencyMs,
-        error: errCode,
+        error_code: errCode,
+        error_detail: e.message?.slice(0, 200) || "unknown",
       });
-    } catch (e2 ) {
+    } catch (e2) {
       log(`Failed to write error reply: ${e2.message}`);
     }
   }
@@ -258,7 +257,7 @@ async function handleEvent(event , config , ctx ) {
 // ===== Plugin definition =====
 
 const nexusPlugin = {
-  id: "nexus",
+  id: "openclaw-channel-nexus",
   meta,
   capabilities: {
     chatTypes: ["direct", "group"],
@@ -270,13 +269,13 @@ const nexusPlugin = {
   reload: { configPrefixes: ["channels.nexus"] },
   config: {
     listAccountIds: () => [DEFAULT_ACCOUNT_ID],
-    resolveAccount: (cfg ) => {
-      const raw = (cfg.channels?.nexus ?? {});
+    resolveAccount: (cfg) => {
+      const raw = cfg.channels?.nexus ?? {};
       return raw;
     },
     defaultAccountId: () => DEFAULT_ACCOUNT_ID,
-    isConfigured: (account ) => Boolean(account.hub2dUrl?.trim()),
-    describeAccount: (account ) => ({
+    isConfigured: (account) => Boolean(account.hub2dUrl?.trim()),
+    describeAccount: (account) => ({
       accountId: DEFAULT_ACCOUNT_ID,
       enabled: account.enabled ?? true,
       configured: Boolean(account.hub2dUrl?.trim()),
@@ -292,7 +291,7 @@ const nexusPlugin = {
       lastEventAt: null,
       lastError: null,
     },
-    buildAccountSnapshot: ({ account, runtime }: any) => ({
+    buildAccountSnapshot: ({ account, runtime }) => ({
       accountId: DEFAULT_ACCOUNT_ID,
       enabled: account.enabled ?? true,
       configured: Boolean(account.hub2dUrl?.trim()),
@@ -306,7 +305,7 @@ const nexusPlugin = {
   },
   outbound: {
     deliveryMode: "direct",
-    sendText: async ({ text, threadId }: any) => {
+    sendText: async ({ text, threadId }) => {
       const hub2dUrl = pluginConfig.hub2dUrl || DEFAULT_HUB2D_URL;
       const agentName = pluginConfig.agentName || DEFAULT_AGENT_NAME;
       const roomId = threadId || pluginConfig.roomId || DEFAULT_ROOM_ID;
@@ -323,14 +322,13 @@ const nexusPlugin = {
     },
   },
   gateway: {
-    startAccount: async (ctx ) => {
+    startAccount: async (ctx) => {
       pluginConfig = ctx.account || {};
-      // 从 OpenClaw config 读取 gateway port 和 auth token
       gatewayPort = ctx.cfg?.gateway?.port || 18789;
       gatewayToken = ctx.cfg?.gateway?.auth?.token || "";
       gatewayTimeoutMs = pluginConfig.gatewayTimeoutMs || DEFAULT_GATEWAY_TIMEOUT_MS;
       connectSSE(pluginConfig, ctx);
-      log(`Nexus channel started v0.2.0 (gatewayTimeoutMs=${gatewayTimeoutMs})`);
+      log(`Nexus channel started v${PLUGIN_VERSION} (gatewayTimeoutMs=${gatewayTimeoutMs})`);
     },
     stopAccount: async () => {
       if (sseAbort) sseAbort.abort();
@@ -342,10 +340,10 @@ const nexusPlugin = {
   },
 };
 
-export default function register(api ) {
+export default function register(api) {
   runtimeApi = api;
   api.registerChannel({ plugin: nexusPlugin });
-  log("Nexus channel plugin registered");
+  log(`Nexus channel plugin registered v${PLUGIN_VERSION}`);
 }
 
 export { nexusPlugin };

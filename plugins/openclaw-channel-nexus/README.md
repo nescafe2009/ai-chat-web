@@ -31,7 +31,7 @@ openclaw gateway restart
 | `gatewayPort` | 否 | `18789` | Gateway HTTP 端口 |
 
 P0 必开配置（openclaw.json）：
-- `plugins.entries.nexus.enabled: true`
+- `plugins.entries.openclaw-channel-nexus.enabled: true`
 - `gateway.http.endpoints.chatCompletions.enabled: true`
 
 ## 前置条件

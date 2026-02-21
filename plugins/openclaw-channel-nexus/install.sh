@@ -100,11 +100,11 @@ else
       "longTextThreshold": 4000
     }
   },
-  "plugins": { "entries": { "nexus": { "enabled": true } } },
+  "plugins": { "entries": { "openclaw-channel-nexus": { "enabled": true } } },
   "gateway": { "http": { "endpoints": { "chatCompletions": { "enabled": true } } } }
 SNIPPET
   echo ''
-  echo '--- P0: plugins.entries.nexus.enabled + chatCompletions.enabled 必须开启 ---'
+  echo '--- P0: plugins.entries.openclaw-channel-nexus.enabled + chatCompletions.enabled 必须开启 ---'
   echo ''
   echo "完整模板参考: ${SCRIPT_DIR}/config-template.json"
 fi

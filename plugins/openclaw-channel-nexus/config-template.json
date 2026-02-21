@@ -12,7 +12,7 @@
   },
   "plugins": {
     "entries": {
-      "nexus": { "enabled": true }
+      "openclaw-channel-nexus": { "enabled": true }
     }
   },
   "gateway": {
