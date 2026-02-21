@@ -11,9 +11,15 @@
 set -euo pipefail
 
 HUB2D_URL="${1:-http://111.231.105.183:9800}"
-AGENTS=("serina" "cortana" "roland")
-FROM_AGENT="serina"
+FROM_AGENT="${NEXUS_FROM_AGENT:-serina}"
 WAIT_SEC="${NEXUS_WAIT_SEC:-30}"
+
+# 支持单节点测试：NEXUS_TO_AGENT=roland ./nexus-regression.sh
+if [ -n "${NEXUS_TO_AGENT:-}" ]; then
+  AGENTS=("$NEXUS_TO_AGENT")
+else
+  AGENTS=("serina" "cortana" "roland")
+fi
 PASS=0
 FAIL=0
 
