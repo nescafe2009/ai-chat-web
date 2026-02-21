@@ -139,8 +139,10 @@ Content-Type: application/json
 ```json
 {
   "event_id": "1771683702115-xh5vuj",
+  "room_id": "general",
   "text": "agent 回复内容",
   "status": "ok",
+  "latency_ms": 1234,
   "truncated": 0,
   "orig_len": null
 }
@@ -148,13 +150,15 @@ Content-Type: application/json
 
 **字段说明：**
 
-| 字段 | 必填 | 说明 |
-|---|---|---|
-| `event_id` | 是 | 对应 inbound event 的 event_id |
-| `text` | 是 | 回复正文 |
-| `status` | 是 | `ok` \| `error` |
-| `truncated` | 否 | 1=被截断，0=未截断 |
-| `orig_len` | 否 | 截断前原始长度（chars） |
+| 字段 | 必填 | hub2d 行为 | 说明 |
+|---|---|---|---|
+| `event_id` | 是 | 必须与 inbound event_id 对应 | 对应 inbound event 的 event_id |
+| `room_id` | 否 | hub2d 忽略（以 event 的 room_id 为准） | 可省略 |
+| `text` | 是 | 落库到 replies.text | 回复正文 |
+| `status` | 是 | 落库到 replies.status | `ok` \| `error` |
+| `latency_ms` | 否 | 落库到 replies.latency_ms | plugin 自行计算的处理延迟（ms） |
+| `truncated` | 否 | 落库到 replies.truncated | 1=被截断，0=未截断 |
+| `orig_len` | 否 | 落库到 replies.orig_len | 截断前原始字符数 |
 
 ---
 
@@ -201,7 +205,7 @@ GET /v1/admin/replies?event_id=<id>
 | `truncated` | integer | 1=内容被截断，0=未截断 |
 | `orig_len` | integer \| null | 截断前原始字符数 |
 | `ts_ms` | number | reply 时间戳（ms） |
-| `created_at` | string | 可读时间（UTC） |
+| `created_at` | string | 可读时间（UTC）。⚠️ 人读时间可能与本地时区不一致，验收以 `ts_ms` 为准 |
 
 ---
 

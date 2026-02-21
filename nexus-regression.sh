@@ -13,7 +13,7 @@ set -euo pipefail
 HUB2D_URL="${1:-http://111.231.105.183:9800}"
 AGENTS=("serina" "cortana" "roland")
 FROM_AGENT="serina"
-WAIT_SEC=30
+WAIT_SEC="${NEXUS_WAIT_SEC:-30}"
 PASS=0
 FAIL=0
 
@@ -74,17 +74,20 @@ for TO_AGENT in "${AGENTS[@]}"; do
 
   if [ "$COUNT" = "0" ]; then
     echo "  ❌ $FROM_AGENT→$TO_AGENT event_id=$EID: 无回复（agent 可能未处理）"
+    echo "     原始响应: $REPLIES"
     FAIL=$((FAIL+1))
   else
     RSTATUS=$(echo "$REPLIES" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d['replies'][0]; print(r.get('status','?'))" 2>/dev/null || echo "?")
     LATENCY=$(echo "$REPLIES" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d['replies'][0]; print(r.get('latency_ms','?'))" 2>/dev/null || echo "?")
     TRUNC=$(echo "$REPLIES" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d['replies'][0]; print(r.get('truncated','?'))" 2>/dev/null || echo "?")
+    ORIG_LEN=$(echo "$REPLIES" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d['replies'][0]; print(r.get('orig_len','null'))" 2>/dev/null || echo "?")
     REPLY_ID=$(echo "$REPLIES" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d['replies'][0]; print(r.get('reply_id','?'))" 2>/dev/null || echo "?")
     if [ "$RSTATUS" = "ok" ]; then
-      echo "  ✅ $FROM_AGENT→$TO_AGENT: reply_id=$REPLY_ID status=$RSTATUS latency_ms=$LATENCY truncated=$TRUNC"
+      echo "  ✅ $FROM_AGENT→$TO_AGENT: reply_id=$REPLY_ID status=$RSTATUS latency_ms=$LATENCY truncated=$TRUNC orig_len=$ORIG_LEN"
       PASS=$((PASS+1))
     else
       echo "  ❌ $FROM_AGENT→$TO_AGENT: reply_id=$REPLY_ID status=$RSTATUS latency_ms=$LATENCY"
+      echo "     原始响应: $REPLIES"
       FAIL=$((FAIL+1))
     fi
   fi
