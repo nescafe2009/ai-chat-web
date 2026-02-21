@@ -276,8 +276,42 @@ curl -X POST http://111.231.105.183:9800/v1/send \
 | /v1/send 字段缺失 | 400 | `{"error":"..."}` |
 | hub2d 内部错误 | 500 | `{"error":"..."}` |
 | /v1/admin/replies 无记录 | 200 | `{"replies":[]}` （空数组，不是 404） |
-| plugin callGateway 超时 | — | status=error, text="[ERROR] gateway_timeout (60s)" 写回 /v1/replies |
-| plugin callGateway 失败 | — | status=error, text="Gateway 5xx: ..." 写回 /v1/replies |
+| plugin callGateway 超时 | — | status=error, error="gateway_timeout_60s", text="[ERROR] gateway_timeout_60s: ..." |
+| plugin callGateway HTTP 失败 | — | status=error, error="http_\<status\>", text="[ERROR] http_500: Gateway 500: ..." |
+| plugin callGateway JSON 解析失败 | — | status=error, error="invalid_json", text="[ERROR] invalid_json: ..." |
+| plugin callGateway 网络错误 | — | status=error, error="fetch_error", text="[ERROR] fetch_error: ..." |
+
+---
+
+## 7.2.1 Plugin Error 结构化约定（T2）
+
+当 callGateway 失败时，plugin 写回 `/v1/replies` 的 error 字段使用结构化短 code，便于机器 grep 和统计告警：
+
+| error code | 触发条件 | 说明 |
+|---|---|---|
+| `gateway_timeout_<N>s` | AbortController 超时触发 | N 为配置的超时秒数（默认 60） |
+| `http_<status>` | Gateway 返回非 2xx | 如 `http_500`、`http_502` |
+| `invalid_json` | Gateway 返回 200 但 body 非合法 JSON | JSON.parse 失败 |
+| `fetch_error` | 网络不可达 / DNS 失败 / 连接拒绝 | fetch 抛出非 AbortError |
+
+**text 字段格式：** `[ERROR] <error_code>: <human_readable_message>`
+
+**配置项：**
+```json
+{
+  "channels": {
+    "nexus": {
+      "gatewayTimeoutMs": 60000
+    }
+  }
+}
+```
+- `gatewayTimeoutMs`：callGateway hard timeout（ms），默认 60000
+- 超时后 plugin 立即写回 error reply，不阻塞 lane
+
+**验收证据（2026-02-21）：**
+- ok: event_id=`1771687828255-2vw429` status=ok latency=5475ms
+- error: event_id=`1771688005037-8jt4sz` status=error error=gateway_timeout_5s latency=5001ms
 
 ---
 
