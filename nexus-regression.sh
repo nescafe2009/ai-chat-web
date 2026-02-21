@@ -5,14 +5,14 @@
 #
 # 验收逻辑:
 #   1. 向每个 agent 各发 1 条消息
-#   2. 等待 30s 让 plugin 处理
+#   2. 等待 60s 让 plugin 处理
 #   3. 用 /v1/admin/replies 取证，打印 status/latency/truncated
 
 set -euo pipefail
 
 HUB2D_URL="${1:-http://111.231.105.183:9800}"
 FROM_AGENT="${NEXUS_FROM_AGENT:-serina}"
-WAIT_SEC="${NEXUS_WAIT_SEC:-30}"
+WAIT_SEC="${NEXUS_WAIT_SEC:-60}"
 
 # 支持单节点测试：NEXUS_TO_AGENT=roland ./nexus-regression.sh
 if [ -n "${NEXUS_TO_AGENT:-}" ]; then
