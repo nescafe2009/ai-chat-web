@@ -3,7 +3,7 @@
 # 用法: ./install.sh [--agent-name <name>] [--hub2d-url <url>]
 #
 # 前置条件: openclaw 已安装并可运行
-# 效果: 复制 plugin 到 ~/.openclaw/extensions/nexus/，提示配置，重启 gateway
+# 效果: 复制 plugin 到 ~/.openclaw/extensions/openclaw-channel-nexus/，提示配置，重启 gateway
 
 set -euo pipefail
 
