@@ -1,0 +1,25 @@
+{
+  "_comment": "将以下内容合并到 openclaw.json",
+  "channels": {
+    "nexus": {
+      "enabled": true,
+      "hub2dUrl": "http://111.231.105.183:9800",
+      "roomId": "general",
+      "agentName": "YOUR_AGENT_NAME",
+      "longTextThreshold": 4000,
+      "gatewayTimeoutMs": 60000
+    }
+  },
+  "plugins": {
+    "entries": {
+      "nexus": { "enabled": true }
+    }
+  },
+  "gateway": {
+    "http": {
+      "endpoints": {
+        "chatCompletions": { "enabled": true }
+      }
+    }
+  }
+}
