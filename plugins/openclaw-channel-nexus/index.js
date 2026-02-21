@@ -267,6 +267,28 @@ const nexusPlugin = {
     nativeCommands: false,
   },
   reload: { configPrefixes: ["channels.nexus"] },
+  configSchema: {
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        enabled: { type: "boolean", description: "Enable/disable the Nexus channel" },
+        hub2dUrl: { type: "string", description: "Hub2d server URL" },
+        roomId: { type: "string", description: "Default room ID" },
+        agentName: { type: "string", description: "Agent name for this node" },
+        longTextThreshold: { type: "integer", minimum: 500, description: "Truncate inbound content above this char count" },
+        gatewayTimeoutMs: { type: "integer", minimum: 5000, description: "Gateway HTTP dispatch timeout in ms" },
+      },
+    },
+    uiHints: {
+      hub2dUrl: { label: "Hub2d URL", placeholder: "http://127.0.0.1:9800" },
+      roomId: { label: "Default Room ID", placeholder: "general" },
+      agentName: { label: "Agent Name", placeholder: "serina" },
+      longTextThreshold: { label: "Long Text Threshold (chars)", placeholder: "4000" },
+      gatewayTimeoutMs: { label: "Gateway Timeout (ms)", placeholder: "60000" },
+      enabled: { label: "Enabled" },
+    },
+  },
   config: {
     listAccountIds: () => [DEFAULT_ACCOUNT_ID],
     resolveAccount: (cfg) => {
