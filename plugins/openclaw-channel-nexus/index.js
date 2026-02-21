@@ -330,7 +330,7 @@ const nexusPlugin = {
       gatewayToken = ctx.cfg?.gateway?.auth?.token || "";
       gatewayTimeoutMs = pluginConfig.gatewayTimeoutMs || DEFAULT_GATEWAY_TIMEOUT_MS;
       connectSSE(pluginConfig, ctx);
-      log(`Nexus channel started (gatewayTimeoutMs=${gatewayTimeoutMs})`);
+      log(`Nexus channel started v0.2.0 (gatewayTimeoutMs=${gatewayTimeoutMs})`);
     },
     stopAccount: async () => {
       if (sseAbort) sseAbort.abort();

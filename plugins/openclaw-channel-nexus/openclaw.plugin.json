@@ -1,21 +1,47 @@
 {
   "id": "nexus",
-  "channels": ["nexus"],
+  "channels": [
+    "nexus"
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "enabled": { "type": "boolean" },
-      "hub2dUrl": { "type": "string" },
-      "roomId": { "type": "string" },
-      "agentName": { "type": "string" },
-      "longTextThreshold": { "type": "integer", "minimum": 500 }
+      "enabled": {
+        "type": "boolean"
+      },
+      "hub2dUrl": {
+        "type": "string"
+      },
+      "roomId": {
+        "type": "string"
+      },
+      "agentName": {
+        "type": "string"
+      },
+      "longTextThreshold": {
+        "type": "integer",
+        "minimum": 500
+      }
     }
   },
   "uiHints": {
-    "hub2dUrl": { "label": "Hub2d URL", "placeholder": "http://127.0.0.1:9800" },
-    "roomId": { "label": "Default Room ID", "placeholder": "general" },
-    "agentName": { "label": "Agent Name", "placeholder": "serina" },
-    "longTextThreshold": { "label": "Long Text Threshold (chars)", "placeholder": "4000" }
-  }
+    "hub2dUrl": {
+      "label": "Hub2d URL",
+      "placeholder": "http://127.0.0.1:9800"
+    },
+    "roomId": {
+      "label": "Default Room ID",
+      "placeholder": "general"
+    },
+    "agentName": {
+      "label": "Agent Name",
+      "placeholder": "serina"
+    },
+    "longTextThreshold": {
+      "label": "Long Text Threshold (chars)",
+      "placeholder": "4000"
+    }
+  },
+  "version": "0.2.0"
 }
