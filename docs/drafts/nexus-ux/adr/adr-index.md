@@ -119,6 +119,21 @@ author: Serina + Cortana
 
 ---
 
+---
+
+## ADR-011 云端工程架构与技术选型（方案A+）
+
+- **结论**：Redis Streams（腾讯云）→ hub2d（内嵌，直连 XREAD）→ WebSocket（plugin 原生ws / UI socket.io）→ nexus plugin → OpenClaw → Agent → ws.send(reply+event_id) → hub2d 幂等落盘
+- **技术栈**：Node.js + TypeScript / 原生ws / socket.io / PostgreSQL / React + Vite / pm2
+- **幂等键**：event_id = Redis stream message ID，贯穿全链；PostgreSQL unique constraint + plugin 内存 Set dedupe
+- **WS 握手**：必须携带 resume_token（= stream lastId），hub2d 从此 offset 重放
+- **工程形态**：所有服务端代码封装进单一工程，部署腾讯云服务器
+- **参考案例**：hearit-io/redis-channels（A+验证）/ mugli/orkid-node（B成本对照）/ soimy/openclaw-channel-dingtalk（OpenClaw channel plugin 官方参考）
+- **详细文档**：`adr/adr-011-cloud-arch-tech-stack.md`（commit ef4eaf5）
+- **状态**：draft（等 03-flows 完成后联合 review）
+
+---
+
 ## 分工备忘
 
 | 产出 | 负责人 |
@@ -126,6 +141,8 @@ author: Serina + Cortana
 | 02-ia.md、03-flows.md | Cortana 主写，Serina review |
 | 05-tech-slice.md（daemon改动） | Serina 主写，Cortana review |
 | adr/ 整理（本文件） | Serina |
+| adr-011 云端架构选型 | Serina 已出草稿（ef4eaf5） |
 | 01-goals.md、04-metrics.md | 双方对齐后推给老板 |
 | daemon 6项改造实施 | Serina |
 | UI 三栏+设置页 | Cortana 主导 |
+| 云端新工程（nexus-hub）实施 | 待 03-flows 通过后启动 |
