@@ -945,7 +945,7 @@ const CHAT_HTML = `<!DOCTYPE html>
           // Ctrl+Enter 换行
           const pos = msgInput.selectionStart;
           const val = msgInput.value;
-          msgInput.value = val.substring(0, pos) + '\\n' + val.substring(pos);
+          msgInput.value = val.substring(0, pos) + '\n' + val.substring(pos);
           msgInput.setSelectionRange(pos + 1, pos + 1);
           e.preventDefault();
         } else {
