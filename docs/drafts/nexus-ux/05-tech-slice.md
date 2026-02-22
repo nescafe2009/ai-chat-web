@@ -39,10 +39,13 @@ See also:
 SQLite is the current hub2d baseline. For the new cloud deployment, **PostgreSQL is the recommended choice**:
 
 1. **Multi-instance / horizontal scale**: PostgreSQL supports concurrent connections from multiple processes or replicas. SQLite has per-file write locks that make multi-instance deployments impractical.
-2. **Connection pooling**: PostgreSQL works with `pg` / `pgpool` / connection pool middleware natively. SQLite's file-lock model limits concurrency without workarounds.
-3. **Schema migrations**: PostgreSQL tooling (`node-pg-migrate`, `drizzle-orm`, `prisma`) is more mature for production migration workflows.
-4. **Unique constraint enforcement**: Our idempotency model requires strict unique constraint on `event_id` (and `event_id + reply_type` variants). PostgreSQL constraint semantics are more reliable under concurrent writes than SQLite.
-5. **Cloud-native**: Tencent Cloud provides managed PostgreSQL (TencentDB for PostgreSQL), enabling backups, replicas, and monitoring without ops overhead.
+2. **Row-level locking**: SQLite's file-level write lock causes `database is locked` errors under high-concurrency writes (events + replies arriving simultaneously). PostgreSQL row-level locks are far better suited to the hub's write pattern.
+3. **Connection pooling**: PostgreSQL works with `pg` / `pgbouncer` / application-level pool natively. In WS long-connection scenarios, connection count grows with subscriber count; proper pooling is critical.
+4. **Schema migrations**: PostgreSQL tooling (`node-pg-migrate`, `drizzle-orm`, `prisma`) is more mature for production migration/rollback workflows.
+5. **Unique constraint enforcement**: Our idempotency model requires strict unique constraint on `event_id` (and `event_id + reply_type` variants). PostgreSQL constraint semantics are more reliable under concurrent writes than SQLite.
+6. **HA / replication**: PostgreSQL supports primary-replica replication and managed failover (TencentDB for PostgreSQL). If hub2d needs to scale horizontally, the DB remains a single source of truth across instances.
+7. **Cloud-native**: Tencent Cloud provides managed PostgreSQL, enabling automated backups, replicas, and monitoring without additional ops overhead.
+8. **Bonus — LISTEN/NOTIFY**: PostgreSQL's native pub/sub (`LISTEN`/`NOTIFY`) can be used for internal fan-out or UI real-time refresh without an extra message bus — not required in v1, but worth noting as an extension path.
 
 > SQLite MAY still be used for local development / testing environment to simplify setup. Production target = PostgreSQL.
 
@@ -130,7 +133,7 @@ hub2d responds: `{ "type": "pong", "ts": 1771731500001 }`
 
 Interval: 30 seconds. hub2d closes connection after 3 missed pings.
 
-### 05.3.5 Reconnect Policy (plugin)
+### 05.3.9 Reconnect Policy (plugin)
 
 - Initial reconnect delay: 1s
 - Exponential backoff: `delay = min(initial * 2^attempt, 60s)`
