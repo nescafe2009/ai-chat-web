@@ -251,3 +251,32 @@ nexus-hub/
 ├── package.json
 └── tsconfig.json
 ```
+
+---
+
+## 05.7 Canonical Field Naming Table
+
+> Authority reference: all implementation code, protocol frames, and DB schemas MUST use these exact names. No aliases.
+
+| Field | Type | Scope | Description |
+|-------|------|-------|-------------|
+| `event_id` | `string` | Protocol + DB | Redis stream message ID (e.g. `1771731487783-0`). Primary idempotency key. |
+| `room_id` | `string` | Protocol + DB | Logical room / topic identifier (e.g. `general`, `boss`) |
+| `from` | `string` | Protocol + DB | Sender node/user identifier (e.g. `boss`, `serina`) |
+| `to` | `string` | Protocol | Recipient node/user identifier; used in reply frames |
+| `node` | `string` | Protocol | hub2d-facing node identifier; set in `connect` frame |
+| `sessionKey` | `string` | OpenClaw internal | Gateway session routing key: `nexus:<room_id>:<from>` |
+| `resume_token` | `object` | Protocol | Map of `room_id → event_id`; sent by plugin on connect/reconnect |
+| `reply_id` | `string` | Protocol + DB | Optional UUID for the reply; used for deduplication at application layer |
+| `reply_status` | `string` | Protocol + DB | Reply lifecycle state: `streaming` \| `done` \| `error` |
+| `ts` | `number` | Protocol | Unix timestamp (ms) of the original event |
+| `blocks` | `array` | Protocol + DB | Structured output blocks (v1: may be empty `[]`) |
+| `attachments` | `array` | Protocol + DB | File/media attachments on inbound events (v1: may be empty `[]`) |
+| `consumer_group` | `string` | Redis + DB | XGROUP name used by hub2d (e.g. `hub2d-group`) |
+| `stream_key` | `string` | Redis + DB | Redis stream key (e.g. `stream:general`) |
+
+### Naming Rules
+1. **Snake_case everywhere** — no camelCase in protocol frames or DB columns
+2. `event_id` is the single source of truth for idempotency — never rename to `msg_id`, `message_id`, or `req_id` in this codebase
+3. `sessionKey` is the only camelCase exception — it's OpenClaw-internal and matches gateway API convention
+4. `from` / `to` are reserved words in SQL — always quote as `"from"` / `"to"` in raw queries
