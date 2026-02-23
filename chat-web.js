@@ -15,7 +15,8 @@ const REDIS_HOST = process.env.REDIS_HOST || '127.0.0.1';
 const REDIS_PORT = process.env.REDIS_PORT || 6379;
 const REDIS_PASS = process.env.REDIS_PASS || 'SerinaCortana2026!';
 const SESSION_TTL = 24 * 60 * 60;
-const MSG_LIMIT = 200; // 每个 stream 最多拉取条数
+const MSG_LIMIT = 500; // 每个 stream 最多拉取条数
+const PAGE_SIZE = 50;  // 前端每页显示条数
 const DOCS_DIR = process.env.DOCS_DIR || path.join(__dirname, 'docs');
 const JOURNALS_DIR = path.join(__dirname, 'journals');
 const ARCHIVE_DIR = process.env.ARCHIVE_DIR || path.join(__dirname, '..', 'stellaris-archive');
@@ -658,6 +659,9 @@ const CHAT_HTML = `<!DOCTYPE html>
     let dateGroups = {};
     let selectedDate = null;
     let userScrolling = false;
+    const PAGE_SIZE = 50;
+    let displayCount = PAGE_SIZE;
+    let loadingMore = false;
     
     const chat = document.getElementById('chat');
     
@@ -665,8 +669,23 @@ const CHAT_HTML = `<!DOCTYPE html>
       return chat.scrollHeight - chat.scrollTop - chat.clientHeight < 100;
     }
     
+    function isNearTop() {
+      return chat.scrollTop < 80;
+    }
+    
     chat.addEventListener('scroll', () => {
       userScrolling = !isNearBottom();
+      if (isNearTop() && !loadingMore && selectedDate && dateGroups[selectedDate]) {
+        const totalMsgs = dateGroups[selectedDate].length;
+        if (displayCount < totalMsgs) {
+          loadingMore = true;
+          const oldHeight = chat.scrollHeight;
+          displayCount = Math.min(displayCount + PAGE_SIZE, totalMsgs);
+          renderMessages();
+          chat.scrollTop = chat.scrollHeight - oldHeight;
+          loadingMore = false;
+        }
+      }
     });
     
     function getDateKey(timestamp) {
@@ -712,6 +731,7 @@ const CHAT_HTML = `<!DOCTYPE html>
     
     function selectDate(dateKey) {
       selectedDate = dateKey;
+      displayCount = PAGE_SIZE;
       renderDateList();
       renderMessages();
       userScrolling = false;
@@ -737,8 +757,17 @@ const CHAT_HTML = `<!DOCTYPE html>
         return;
       }
       
-      const msgs = dateGroups[selectedDate];
-      chat.innerHTML = msgs.map(m => {
+      const allMsgs = dateGroups[selectedDate];
+      const total = allMsgs.length;
+      const startIdx = Math.max(0, total - displayCount);
+      const msgs = allMsgs.slice(startIdx);
+      
+      let header = '';
+      if (startIdx > 0) {
+        header = '<div style="text-align:center;padding:10px;color:#666;font-size:12px">↑ 向上滚动加载更多（还有 ' + startIdx + ' 条）</div>';
+      }
+      
+      chat.innerHTML = header + msgs.map(m => {
         const time = new Date(parseInt(m.timestamp)).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         const toLabel = m.to ? ' → ' + formatTo(m.to) : '';
         return '<div class="message ' + m.from + '">' +
@@ -964,7 +993,11 @@ const CHAT_HTML = `<!DOCTYPE html>
     });
     
     loadMessages();
-    setInterval(loadMessages, 10000);
+    setInterval(loadMessages, 5000);
+    // 切回页面时立即刷新（防止浏览器节流 setInterval）
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) loadMessages();
+    });
   </script>
 </body>
 </html>`;
